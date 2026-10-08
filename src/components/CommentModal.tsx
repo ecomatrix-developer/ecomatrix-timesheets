@@ -67,7 +67,19 @@ export default function CommentModal({
   }
 
   function updateRow(index: number, patch: Partial<CommentRow>) {
-    setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+    setRows((prev) =>
+      prev.map((r, i) => {
+        if (i !== index) return r;
+        const next = { ...r, ...patch };
+        // Matches v1's toggleOtherDetail(): switching away from "Other"
+        // clears any detail text so it can't silently survive under a
+        // different category.
+        if (patch.category !== undefined && patch.category !== "Other") {
+          next.detail = "";
+        }
+        return next;
+      })
+    );
   }
 
   function handleSaveStructured() {
@@ -81,42 +93,61 @@ export default function CommentModal({
   return (
     <AnimatePresence>
       {open && (
-        <>
+        <motion.div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+        >
           <motion.div
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={onClose}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/50"
-            onClick={onClose}
           />
           <motion.div
             initial={{ opacity: 0, scale: 0.96, y: 12 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 12 }}
-            transition={{ duration: 0.18 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            transition={{ type: "spring", stiffness: 340, damping: 28 }}
+            className={`relative glass-strong w-full ${
+              isProject ? "max-w-2xl" : "max-w-md"
+            } max-h-[85vh] overflow-y-auto scrollbar-thin text-foreground`}
+            onClick={(e) => e.stopPropagation()}
           >
-            <div
-              className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[85vh] overflow-y-auto scrollbar-thin"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-                <h3 className="font-semibold">Add Comment</h3>
-                <button onClick={onClose} className="text-muted hover:text-foreground p-1">
-                  <FaTimes className="h-4 w-4" />
-                </button>
-              </div>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <h3 className="font-semibold text-base">
+                {isProject ? "Add Detailed Comment" : "Add Comment"}
+              </h3>
+              <button onClick={onClose} className="text-muted hover:text-foreground p-1.5 rounded-lg hover:bg-gray-100 transition-colors">
+                <FaTimes className="h-4 w-4" />
+              </button>
+            </div>
 
-              <div className="p-5">
-                {isProject ? (
-                  <>
-                    <p className="text-sm text-muted mb-3">
-                      Log hours according to categories. The grid cell&apos;s total
-                      will be updated to match the sum below.
-                    </p>
-                    <div className="space-y-2">
+            <div className="p-5">
+              {isProject ? (
+                <>
+                  <p className="text-sm text-muted mb-4">
+                    Log hours according to categories. The grid cell&apos;s total
+                    will be updated to match the sum below.
+                  </p>
+
+                  <div className="rounded-xl border border-gray-200">
+                    <div className="grid grid-cols-[88px_1fr_36px] sm:grid-cols-[96px_1fr_1fr_36px] gap-2 px-3 py-2 bg-gray-50 border-b border-gray-200 text-xs font-semibold text-muted rounded-t-xl">
+                      <span>Hours</span>
+                      <span>Category</span>
+                      <span className="hidden sm:block">Detail</span>
+                      <span />
+                    </div>
+                    <div className="divide-y divide-gray-100">
                       {rows.map((row, i) => (
-                        <div key={i} className="flex gap-2 items-start">
+                        <div
+                          key={i}
+                          className={`grid grid-cols-[88px_1fr_36px] sm:grid-cols-[96px_1fr_1fr_36px] gap-2 px-3 py-2.5 items-start bg-white ${
+                            i === rows.length - 1 ? "rounded-b-xl" : ""
+                          }`}
+                        >
                           <input
                             type="number"
                             min={0}
@@ -126,27 +157,28 @@ export default function CommentModal({
                               updateRow(i, { hours: parseFloat(e.target.value) || 0 })
                             }
                             placeholder="Hours"
-                            className="glass-input w-20 px-2 py-1.5 text-sm shrink-0"
+                            className="glass-input w-full px-2 py-1.5 text-sm"
                           />
                           <Select
                             value={row.category}
                             onChange={(value) => updateRow(i, { category: value })}
                             placeholder="-- Select Category --"
-                            className="flex-1"
                             options={COMMENT_CATEGORIES.map((c) => ({ value: c, label: c }))}
                           />
-                          {row.category === "Other" && (
+                          {row.category === "Other" ? (
                             <input
                               type="text"
                               value={row.detail ?? ""}
                               onChange={(e) => updateRow(i, { detail: e.target.value })}
                               placeholder="Specify details…"
-                              className="glass-input flex-1 px-2 py-1.5 text-sm"
+                              className="glass-input col-span-2 sm:col-span-1 w-full px-2 py-1.5 text-sm"
                             />
+                          ) : (
+                            <div className="hidden sm:block" />
                           )}
                           <button
                             onClick={() => removeRow(i)}
-                            className="text-red-600 hover:text-red-700 p-1.5 shrink-0"
+                            className="text-red-600 hover:text-red-700 hover:bg-red-50 p-1.5 rounded-lg transition-colors justify-self-end"
                             title="Remove row"
                           >
                             <FaTrash className="h-3 w-3" />
@@ -154,38 +186,39 @@ export default function CommentModal({
                         </div>
                       ))}
                     </div>
-                    <button
-                      onClick={addRow}
-                      className="btn-ghost inline-flex items-center gap-2 px-3 py-1.5 text-xs mt-3"
-                    >
-                      <FaPlus className="h-3 w-3" /> Add Row
-                    </button>
-                  </>
-                ) : (
-                  <textarea
-                    value={simpleText}
-                    onChange={(e) => setSimpleText(e.target.value)}
-                    rows={5}
-                    placeholder="Enter your comment here..."
-                    className="glass-input w-full px-3 py-2 text-sm"
-                  />
-                )}
-              </div>
+                  </div>
 
-              <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100">
-                <button onClick={onClose} className="btn-ghost px-4 py-2 text-sm">
-                  Close
-                </button>
-                <button
-                  onClick={isProject ? handleSaveStructured : () => onSaveSimple(simpleText)}
-                  className="btn-primary px-4 py-2 text-sm"
-                >
-                  Save Comment
-                </button>
-              </div>
+                  <button
+                    onClick={addRow}
+                    className="btn-ghost inline-flex items-center gap-2 px-3 py-1.5 text-xs mt-3"
+                  >
+                    <FaPlus className="h-3 w-3" /> Add Row
+                  </button>
+                </>
+              ) : (
+                <textarea
+                  value={simpleText}
+                  onChange={(e) => setSimpleText(e.target.value)}
+                  rows={5}
+                  placeholder="Enter your comment here..."
+                  className="glass-input w-full px-3 py-2 text-sm"
+                />
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100">
+              <button onClick={onClose} className="btn-ghost px-4 py-2 text-sm">
+                Close
+              </button>
+              <button
+                onClick={isProject ? handleSaveStructured : () => onSaveSimple(simpleText)}
+                className="btn-primary px-4 py-2 text-sm"
+              >
+                Save Comment
+              </button>
             </div>
           </motion.div>
-        </>
+        </motion.div>
       )}
     </AnimatePresence>
   );

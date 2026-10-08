@@ -1,0 +1,188 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #f8f9fa;
+  --foreground: #212529;
+  --card-bg: #ffffff;
+  --card-border: rgba(0, 0, 0, 0.06);
+  --muted: #6c757d;
+  --purple-start: #667eea;
+  --purple-end: #764ba2;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  min-height: 100vh;
+}
+
+/* Card look matching v1's Bootstrap .card: border: none, soft shadow, rounded */
+.card-surface {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+  border-radius: 0.75rem;
+}
+
+.card-surface-strong {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  box-shadow: 0 0.35rem 1rem rgba(0, 0, 0, 0.08);
+  border-radius: 0.75rem;
+}
+
+/* Backwards-compatible aliases so existing "glass"/"glass-strong" utility
+   classes throughout the app now render as light Bootstrap-style cards
+   instead of dark glassmorphism panels. */
+.glass {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+  border-radius: 0.75rem;
+}
+
+.glass-strong {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  box-shadow: 0 0.35rem 1rem rgba(0, 0, 0, 0.08);
+  border-radius: 0.75rem;
+}
+
+.glass-input {
+  background: #fff;
+  border: 1px solid #dde1e6;
+  border-radius: 0.5rem;
+  color: var(--foreground);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.glass-input:hover {
+  border-color: #b9c0ca;
+}
+.glass-input:focus {
+  outline: none;
+  border-color: #8b93f0;
+  box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.18);
+}
+
+/* Every <select> in the app uses this instead of the plain .glass-input,
+   which otherwise leaves the browser's native dropdown arrow in place —
+   inconsistent across browsers/OSes and visually mismatched with the rest
+   of the custom-styled UI. This hides the native arrow (appearance: none)
+   and draws one consistent chevron via an inline SVG background image. */
+.select-input {
+  background-color: #fff;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.65rem center;
+  background-size: 1rem;
+  border: 1px solid #dde1e6;
+  border-radius: 0.5rem;
+  color: var(--foreground);
+  padding-right: 2.25rem;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  cursor: pointer;
+  font-weight: 500;
+}
+.select-input:hover:not(:disabled) {
+  border-color: #b9c0ca;
+  background-color: #fafbfc;
+}
+.select-input:focus {
+  outline: none;
+  border-color: #8b93f0;
+  box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.18);
+}
+.select-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--purple-start) 0%, var(--purple-end) 100%);
+  color: white;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  border: none;
+  transition: filter 0.15s ease, transform 0.1s ease;
+}
+.btn-primary:hover {
+  filter: brightness(1.06);
+}
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  background: #fff;
+  border: 1px solid #ced4da;
+  color: var(--foreground);
+  border-radius: 0.5rem;
+  transition: background 0.15s ease;
+}
+.btn-ghost:hover {
+  background: #f1f3f5;
+}
+
+.btn-danger {
+  background: #dc3545;
+  color: white;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  border: none;
+}
+.btn-danger:hover {
+  background: #bb2d3b;
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: #e9ecef;
+  border-radius: 0.5rem;
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.7),
+    transparent
+  );
+  animation: shimmer 1.6s infinite;
+  background-size: 1000px 100%;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 999px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  .text-muted {
+    color: var(--muted);
+  }
+}

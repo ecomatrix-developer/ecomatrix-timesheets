@@ -67,7 +67,7 @@ export default function CreateProjectClient() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="w-full">
       <h1 className="text-xl font-semibold mb-1">Create New Project(s)</h1>
       <p className="text-sm text-muted mb-6">
         Add one or more projects at once — use &quot;Add New&quot; to stack

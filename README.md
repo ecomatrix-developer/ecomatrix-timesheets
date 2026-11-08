@@ -46,6 +46,82 @@ Supabase connection so the app runs out of the box:
 Never commit real secrets from this file anywhere public — it's already
 excluded via `.gitignore`.
 
+## Backfill historical MongoDB data
+
+The legacy source is the `timesheetDB` MongoDB database. The importer at
+`scripts/import-mongo-to-supabase.cjs` maps Mongo user names to Supabase user
+UUIDs, Mongo project IDs to Supabase project UUIDs, and legacy category values
+to the `category` column. It bcrypt-hashes legacy passwords, preserves Mongo
+IDs in `mongo_id`, and defaults project types to `Energy Modelling` because
+the legacy project documents have no project-type field. Since the legacy
+records do not contain creation timestamps, the importer sets those to the
+import time; timezone-free `submitted_at` values are interpreted as UTC.
+
+From the project root in PowerShell, set the Mongo URI in the same terminal
+session without putting it in shell history:
+
+```powershell
+$secureMongoUri = Read-Host "MongoDB connection URI" -AsSecureString
+$env:MONGODB_URI = [System.Net.NetworkCredential]::new("", $secureMongoUri).Password
+```
+
+First run the non-writing validation. Supabase credentials are loaded from
+the ignored `.env.local` file:
+
+```powershell
+npm run import:mongo -- --dry-run
+```
+
+The source contains repeated employee/date/project cells and repeated
+employee/date submissions. Before applying, inspect target indexes in the
+Supabase SQL Editor:
+
+```sql
+select tablename, indexname, indexdef
+from pg_indexes
+where schemaname = 'public'
+   and tablename in ('timesheet_entries', 'submitted_days');
+```
+
+If a unique index enforces one row per employee/date/project (or one
+submitted day per employee/date), PostgreSQL will reject the corresponding
+duplicates. Do not drop such an index without deciding whether preserving
+those duplicate source rows is more important than the app's one-cell/one-day
+assumption.
+
+Back up Supabase before clearing the operational tables. The importer refuses
+to apply while any of these tables contain rows. To clear them in the Supabase
+SQL Editor, run:
+
+```sql
+begin;
+delete from public.submitted_weeks;
+delete from public.submitted_days;
+delete from public.timesheet_entries;
+delete from public.projects;
+delete from public.users;
+commit;
+```
+
+Then run the write mode:
+
+```powershell
+npm run import:mongo -- --apply
+```
+
+The importer writes in dependency order and reports final row counts. It does
+not clear or modify the `staging_mongo_*` tables. If an import fails after
+inserts begin, restore from the backup or clear the operational tables again
+before retrying; the script intentionally refuses to append into a partly
+imported target. For compatibility with Supabase's unique indexes, the
+operational tables contain one row per employee/date/project-or-category and
+one submitted-day row per employee/date. Every raw document in a duplicate
+timesheet-cell group or submitted-day group is retained in the corresponding
+`staging_mongo_timesheet_entries` or `staging_mongo_submitted_days` table.
+Submitted duplicate cells keep one row's hours; unsubmitted non-identical
+duplicates sum hours, and exact duplicates count once in the operational
+table. Duplicate submitted days keep the latest `submitted_at` record.
+
 ## Architecture
 
 - **All Supabase access happens server-side** via `src/lib/supabaseAdmin.ts`,

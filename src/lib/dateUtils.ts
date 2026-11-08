@@ -57,6 +57,25 @@ export function getDateInfoForMonth(year: number, month: number): DateInfo[] {
   });
 }
 
+export function getDateInfoBetween(from: string, to: string): DateInfo[] {
+  const dates: DateInfo[] = [];
+  const start = new Date(`${from}T00:00:00.000Z`);
+  const end = new Date(`${to}T00:00:00.000Z`);
+  for (const date = new Date(start); date <= end; date.setUTCDate(date.getUTCDate() + 1)) {
+    const year = date.getUTCFullYear();
+    const month = date.getUTCMonth() + 1;
+    const dayNumber = date.getUTCDate();
+    const weekday = pyWeekday(year, month, dayNumber);
+    dates.push({
+      date: toDateStr(year, month, dayNumber),
+      dayName: DAY_NAMES[weekday],
+      dayNumber,
+      weekday,
+    });
+  }
+  return dates;
+}
+
 export function isWeekend(dateStr: string): boolean {
   const [y, m, d] = dateStr.split("-").map(Number);
   const wd = pyWeekday(y, m, d);

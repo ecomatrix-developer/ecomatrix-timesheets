@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getAllProjects, getAllUsers, toProjectMap } from "@/lib/data";
-import { todayYearMonth } from "@/lib/dateUtils";
+import { getDateBuckets, resolveDateRange } from "@/lib/dateRange";
 import PageTransition from "@/components/PageTransition";
 import InsightsClient from "./InsightsClient";
 
@@ -26,9 +26,9 @@ export default async function InsightsPage({
   searchParams: Promise<{
     employee_filter?: string;
     project_filter?: string;
-    time_filter?: string;
-    month?: string;
-    year?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    datePreset?: string;
   }>;
 }) {
   const session = await getSession();
@@ -36,12 +36,9 @@ export default async function InsightsPage({
   if (session.role !== "admin") redirect("/login");
 
   const resolvedSearchParams = await searchParams;
+  const dateRange = resolveDateRange(resolvedSearchParams);
   const employeeFilter = resolvedSearchParams.employee_filter ?? "all";
   const projectFilter = resolvedSearchParams.project_filter ?? "all";
-  const timeFilter = resolvedSearchParams.time_filter ?? "month";
-  const { year: defYear, month: defMonth } = todayYearMonth();
-  const selectedYear = parseInt(resolvedSearchParams.year ?? "", 10) || defYear;
-  const selectedMonth = parseInt(resolvedSearchParams.month ?? "", 10) || defMonth;
 
   const [projects, users] = await Promise.all([getAllProjects(), getAllUsers()]);
   const projectMap = toProjectMap(projects);
@@ -50,7 +47,9 @@ export default async function InsightsPage({
 
   const { data: entries, error } = await supabaseAdmin
     .from("timesheet_entries")
-    .select("project_id, category, employee_id, hours, comment, entry_date");
+    .select("project_id, category, employee_id, hours, comment, entry_date")
+    .gte("entry_date", dateRange.from)
+    .lte("entry_date", dateRange.to);
   if (error) throw error;
 
   const hoursByProject = new Map<string, number>();
@@ -87,19 +86,10 @@ export default async function InsightsPage({
   // breakdown (the same {hours, category}[] JSON the CommentModal writes)
   // — matches v1's exact "use_comment_breakdown" logic so hours are never
   // double-counted between the grid total and the breakdown.
-  let startDate: string | null = null;
-  let endDate: string | null = null;
-  if (timeFilter === "month") {
-    startDate = `${selectedYear}-${String(selectedMonth).padStart(2, "0")}-01`;
-    const lastDay = new Date(selectedYear, selectedMonth, 0).getDate();
-    endDate = `${selectedYear}-${String(selectedMonth).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-  }
-
   const categoryTotals = new Map<string, number>();
   for (const e of entries ?? []) {
     if (employeeFilter !== "all" && e.employee_id !== employeeFilter) continue;
     if (projectFilter !== "all" && e.project_id !== projectFilter) continue;
-    if (startDate && endDate && (e.entry_date < startDate || e.entry_date > endDate)) continue;
 
     const commentStr = (e.comment ?? "").trim();
     if (commentStr.startsWith("[")) {
@@ -137,28 +127,14 @@ export default async function InsightsPage({
     { name: "Non-Billable", hours: Math.round(nonBillableHours * 100) / 100 },
   ];
 
-  // --- New: Monthly hours trend (last 6 months) ---
-  const monthShort = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const now = new Date();
-  const monthRanges: { label: string; start: string; end: string }[] = [];
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const y = d.getFullYear();
-    const m = d.getMonth() + 1;
-    const lastDay = new Date(y, m, 0).getDate();
-    monthRanges.push({
-      label: `${monthShort[m - 1]} ${y}`,
-      start: `${y}-${String(m).padStart(2, "0")}-01`,
-      end: `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`,
-    });
-  }
-  const monthlyTrend = monthRanges.map((r) => {
+  // --- Range hours trend, grouped daily for short windows and weekly for longer windows ---
+  const monthlyTrend = getDateBuckets(dateRange.from, dateRange.to).map((bucket) => {
     let hours = 0;
     for (const e of entries ?? []) {
-      if (e.entry_date < r.start || e.entry_date > r.end) continue;
+      if (e.entry_date < bucket.from || e.entry_date > bucket.to) continue;
       hours += Number(e.hours ?? 0);
     }
-    return { name: r.label, hours: Math.round(hours * 100) / 100 };
+    return { name: bucket.label, hours: Math.round(hours * 100) / 100 };
   });
 
   // --- New: Project status breakdown ---
@@ -181,9 +157,7 @@ export default async function InsightsPage({
         projects={projects.map((p) => ({ id: p.id, name: p.name }))}
         selectedEmployee={employeeFilter}
         selectedProject={projectFilter}
-        selectedTime={timeFilter}
-        selectedMonth={selectedMonth}
-        selectedYear={selectedYear}
+        dateRange={dateRange}
       />
     </PageTransition>
   );

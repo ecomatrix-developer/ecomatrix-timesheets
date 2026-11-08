@@ -45,28 +45,28 @@ export interface EmployeeProjectHours {
 }
 
 export default function EmployeeOverview({
-  monthLabel,
-  monthRegularHours,
-  monthOvertimeHours,
-  monthPtoHours,
+  periodLabel,
+  periodRegularHours,
+  periodOvertimeHours,
+  periodPtoHours,
   recentDays,
   projectHours,
 }: {
-  monthLabel: string;
-  monthRegularHours: number;
-  monthOvertimeHours: number;
-  monthPtoHours: number;
+  periodLabel: string;
+  periodRegularHours: number;
+  periodOvertimeHours: number;
+  periodPtoHours: number;
   recentDays: EmployeeDayStatus[];
   projectHours: EmployeeProjectHours[];
 }) {
-  const monthTotal = monthRegularHours + monthOvertimeHours;
+  const periodTotal = periodRegularHours + periodOvertimeHours;
   const pendingDays = recentDays.filter((d) => !d.submitted && d.hours > 0);
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
-          <FaClock className="text-accent h-4 w-4" /> This Month ({monthLabel})
+          <FaClock className="text-accent h-4 w-4" /> Selected Period ({periodLabel})
         </h2>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
@@ -76,7 +76,7 @@ export default function EmployeeOverview({
             whileHover={{ y: -4 }}
             className="relative overflow-hidden flex items-center justify-between gap-2 p-4"
           >
-            <CountUpStat value={Math.round(monthTotal * 100) / 100} label="Total hours logged" accent="#667eea" decimals={2} />
+            <CountUpStat value={Math.round(periodTotal * 100) / 100} label="Total hours logged" accent="#667eea" decimals={2} />
             <FaHourglassHalf className="h-6 w-6 text-gray-300 shrink-0" />
           </GlassCard>
           <GlassCard
@@ -86,7 +86,7 @@ export default function EmployeeOverview({
             whileHover={{ y: -4 }}
             className="relative overflow-hidden flex items-center justify-between gap-2 p-4"
           >
-            <CountUpStat value={Math.round(monthRegularHours * 100) / 100} label="Regular hours" accent="#22c55e" decimals={2} />
+            <CountUpStat value={Math.round(periodRegularHours * 100) / 100} label="Regular hours" accent="#22c55e" decimals={2} />
             <FaCheckCircle className="h-6 w-6 text-gray-300 shrink-0" />
           </GlassCard>
           <GlassCard
@@ -96,7 +96,7 @@ export default function EmployeeOverview({
             whileHover={{ y: -4 }}
             className="relative overflow-hidden flex items-center justify-between gap-2 p-4"
           >
-            <CountUpStat value={Math.round(monthOvertimeHours * 100) / 100} label="Overtime hours" accent="#f59e0b" decimals={2} />
+            <CountUpStat value={Math.round(periodOvertimeHours * 100) / 100} label="Overtime hours" accent="#f59e0b" decimals={2} />
             <FaFireAlt className="h-6 w-6 text-gray-300 shrink-0" />
           </GlassCard>
           <GlassCard
@@ -106,7 +106,7 @@ export default function EmployeeOverview({
             whileHover={{ y: -4 }}
             className="relative overflow-hidden flex items-center justify-between gap-2 p-4"
           >
-            <CountUpStat value={Math.round(monthPtoHours * 100) / 100} label="PTO used" accent="#8b5cf6" decimals={2} />
+            <CountUpStat value={Math.round(periodPtoHours * 100) / 100} label="PTO used" accent="#8b5cf6" decimals={2} />
             <FaUmbrellaBeach className="h-6 w-6 text-gray-300 shrink-0" />
           </GlassCard>
         </div>
@@ -115,14 +115,14 @@ export default function EmployeeOverview({
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="glass p-4">
             <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
               <h3 className="text-sm font-semibold flex items-center gap-1.5">
-                <FaCalendarCheck className="h-3.5 w-3.5 text-accent shrink-0" /> Last 7 Days
+                <FaCalendarCheck className="h-3.5 w-3.5 text-accent shrink-0" /> Daily Activity
               </h3>
               <Link href="/timesheet" className="text-xs text-accent hover:underline inline-flex items-center gap-1 shrink-0">
                 Go to Timesheet <FaArrowRight className="h-2.5 w-2.5" />
               </Link>
             </div>
-            <div className="space-y-1.5">
-              {recentDays.length === 0 && <p className="text-sm text-muted">No recent entries.</p>}
+            <div className="space-y-1.5 max-h-64 overflow-y-auto scrollbar-thin">
+              {recentDays.length === 0 && <p className="text-sm text-muted">No entries in this period.</p>}
               {recentDays.map((d) => (
                 <div key={d.date} className="flex items-center justify-between gap-2 text-sm border-b border-gray-100 pb-1.5">
                   <span className="shrink-0">{d.dayLabel}</span>
@@ -153,10 +153,10 @@ export default function EmployeeOverview({
             className="glass p-4"
           >
             <h3 className="text-sm font-semibold mb-3 flex items-center gap-1.5">
-              <FaFolderOpen className="h-3.5 w-3.5 text-accent" /> Your Projects This Month
+              <FaFolderOpen className="h-3.5 w-3.5 text-accent" /> Your Projects in This Period
             </h3>
             {projectHours.length === 0 ? (
-              <p className="text-sm text-muted">No project hours logged yet this month.</p>
+              <p className="text-sm text-muted">No project hours logged in this period.</p>
             ) : (
               <div className="flex flex-col sm:flex-row items-center gap-4">
                 <div style={{ width: 120, height: 120 }} className="shrink-0">

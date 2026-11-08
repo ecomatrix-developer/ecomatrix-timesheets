@@ -35,7 +35,7 @@ export default function Select({
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const [panelRect, setPanelRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [panelRect, setPanelRect] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
   const selected = options.find((o) => o.value === value);
 
   useEffect(() => {
@@ -62,8 +62,20 @@ export default function Select({
   const updatePanelRect = useCallback(() => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    setPanelRect({ top: rect.bottom + 6, left: rect.left, width: rect.width });
-  }, []);
+    const desiredHeight = Math.min(288, Math.max(120, options.length * 40));
+    const spaceBelow = window.innerHeight - rect.bottom - 16;
+    const spaceAbove = rect.top - 16;
+    const opensAbove = spaceBelow < desiredHeight && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(96, Math.min(desiredHeight, opensAbove ? spaceAbove : spaceBelow));
+    const width = Math.min(rect.width, window.innerWidth - 16);
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    setPanelRect({
+      top: opensAbove ? rect.top - maxHeight - 6 : rect.bottom + 6,
+      left,
+      width,
+      maxHeight,
+    });
+  }, [options.length]);
 
   useLayoutEffect(() => {
     if (!isOpen) return;
@@ -121,8 +133,9 @@ export default function Select({
                 top: panelRect.top,
                 left: panelRect.left,
                 width: panelRect.width,
+                maxHeight: panelRect.maxHeight,
               }}
-              className="z-[100] bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 max-h-72 overflow-y-auto scrollbar-thin"
+              className="z-[140] bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 overflow-y-auto scrollbar-thin"
             >
               {options.length === 0 ? (
                 <p className="px-3.5 py-2 text-sm text-muted">No options.</p>

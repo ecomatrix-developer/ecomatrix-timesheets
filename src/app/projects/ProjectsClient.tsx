@@ -10,6 +10,8 @@ import { deleteProjectAction } from "@/app/(actions)/projectActions";
 import Modal from "@/components/Modal";
 import Pagination from "@/components/Pagination";
 import { PAGE_SIZE } from "@/lib/constants";
+import DateRangePicker from "@/components/DateRangePicker";
+import type { DateRange } from "@/lib/dateRange";
 import { toast } from "@/lib/toast";
 import { FaPlus, FaSearch, FaTimes, FaEdit, FaTrash, FaFolderOpen } from "react-icons/fa";
 
@@ -28,6 +30,7 @@ const TYPE_COLORS: Record<string, string> = {
 
 export default function ProjectsClient({
   projects,
+  dateRange,
   selectedStatuses,
   selectedTypes,
   searchTerm,
@@ -36,6 +39,7 @@ export default function ProjectsClient({
   totalItems,
 }: {
   projects: Project[];
+  dateRange: DateRange;
   selectedStatuses: string[];
   selectedTypes: string[];
   searchTerm: string;
@@ -66,6 +70,9 @@ export default function ProjectsClient({
     }
     nextTypes.forEach((t) => params.append("project_type", t));
     if (nextSearch) params.set("search_term", nextSearch);
+    params.set("datePreset", dateRange.preset);
+    params.set("dateFrom", dateRange.from);
+    params.set("dateTo", dateRange.to);
     router.push(`/projects?${params.toString()}`);
     // Next's client router cache can otherwise serve a stale RSC response
     // for a (filters, page) combination visited earlier in this session.
@@ -82,6 +89,9 @@ export default function ProjectsClient({
     types.forEach((t) => params.append("project_type", t));
     if (search) params.set("search_term", search);
     params.set("page", String(nextPage));
+    params.set("datePreset", dateRange.preset);
+    params.set("dateFrom", dateRange.from);
+    params.set("dateTo", dateRange.to);
     router.push(`/projects?${params.toString()}`);
     router.refresh();
   }
@@ -142,20 +152,23 @@ export default function ProjectsClient({
   }
 
   return (
-    <div className="max-w-6xl mx-auto">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+    <div className="w-full">
+      <div className="flex flex-col gap-4 mb-6 xl:flex-row xl:items-center xl:justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Projects</h1>
           <p className="text-muted text-sm">{totalItems} matching projects</p>
         </div>
-        <Link href="/projects/create">
-          <motion.span
-            whileTap={{ scale: 0.96 }}
-            className="btn-primary inline-flex items-center gap-2 px-4 py-2 text-sm cursor-pointer"
-          >
-            <FaPlus className="h-3 w-3" /> Create Project
-          </motion.span>
-        </Link>
+        <div className="flex flex-wrap items-center justify-start gap-2 xl:justify-end">
+          <DateRangePicker from={dateRange.from} to={dateRange.to} preset={dateRange.preset} />
+          <Link href="/projects/create">
+            <motion.span
+              whileTap={{ scale: 0.96 }}
+              className="btn-primary inline-flex items-center gap-2 px-4 py-2 text-sm cursor-pointer"
+            >
+              <FaPlus className="h-3 w-3" /> Create Project
+            </motion.span>
+          </Link>
+        </div>
       </div>
 
       <div className="glass p-4 mb-6 flex flex-col gap-4">
@@ -195,7 +208,13 @@ export default function ProjectsClient({
                 // Explicit empty `status` marker: "cleared", not "untouched"
                 // — otherwise the page would fall back to its active-only
                 // default instead of actually showing every status.
-                router.push("/projects?status=");
+                const params = new URLSearchParams({
+                  status: "",
+                  datePreset: dateRange.preset,
+                  dateFrom: dateRange.from,
+                  dateTo: dateRange.to,
+                });
+                router.push(`/projects?${params.toString()}`);
                 router.refresh();
               }}
               className="px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-red-200"

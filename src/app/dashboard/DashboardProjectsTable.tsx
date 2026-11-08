@@ -76,6 +76,10 @@ export default function DashboardProjectsTable({
     if (newSearch.trim()) params.set("search_term", newSearch.trim());
     newStatuses.forEach((s) => params.append("status", s));
     newTypes.forEach((t) => params.append("project_type", t));
+    for (const key of ["datePreset", "dateFrom", "dateTo"]) {
+      const value = searchParams.get(key);
+      if (value) params.set(key, value);
+    }
     params.set("page", "1");
     router.push(`/dashboard?${params.toString()}`);
     router.refresh();
@@ -121,7 +125,12 @@ export default function DashboardProjectsTable({
 
   function clearAll() {
     setSearch("");
-    router.push("/dashboard");
+    const params = new URLSearchParams();
+    for (const key of ["datePreset", "dateFrom", "dateTo"]) {
+      const value = searchParams.get(key);
+      if (value) params.set(key, value);
+    }
+    router.push(`/dashboard?${params.toString()}`);
     router.refresh();
   }
 

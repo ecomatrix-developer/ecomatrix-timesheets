@@ -31,9 +31,12 @@ export default async function ReportsPage({
   if (session.role !== "admin") redirect("/dashboard");
 
   const resolvedSearchParams = await searchParams;
-  const { year: defYear, month: defMonth } = todayYearMonth();
-  const year = parseInt(resolvedSearchParams.year ?? "", 10) || defYear;
-  const month = parseInt(resolvedSearchParams.month ?? "", 10) || defMonth;
+  const { year: defaultYear, month: defaultMonth } = todayYearMonth();
+  const year = parseInt(resolvedSearchParams.year ?? "", 10) || defaultYear;
+  const month = parseInt(resolvedSearchParams.month ?? "", 10) || defaultMonth;
+  const dateInfoForMonth = getDateInfoForMonth(year, month);
+  const monthFirstDate = dateInfoForMonth[0].date;
+  const monthLastDate = dateInfoForMonth[dateInfoForMonth.length - 1].date;
   const selectedUsername = resolvedSearchParams.employee ?? "";
   const submissionsPage = Math.max(1, parseInt(resolvedSearchParams.submissionsPage ?? "1", 10) || 1);
   const totalsPage = Math.max(1, parseInt(resolvedSearchParams.totalsPage ?? "1", 10) || 1);
@@ -83,7 +86,9 @@ export default async function ReportsPage({
       return supabaseAdmin
         .from("submitted_days")
         .select("employee_id, entry_date, total_hours, submitted_at", { count: "exact" })
-        .eq("employee_id", selectedEmployee!.id);
+        .eq("employee_id", selectedEmployee!.id)
+        .gte("entry_date", monthFirstDate)
+        .lte("entry_date", monthLastDate);
     }
 
     const { count: submissionsCount, error: subCountErr } = await submissionsBaseQuery();
@@ -106,16 +111,9 @@ export default async function ReportsPage({
       submittedAt: s.submitted_at,
     }));
 
-    // Aggregate project totals for the selected employee, SCOPED TO THE
-    // SELECTED MONTH — mirrors v1's /reports exactly: its aggregation
-    // pipeline filters by `date_filtered_queries`, which includes the same
-    // month's date range used everywhere else on this page (the grid,
-    // PTO/Vacation summaries, etc.), not the employee's entire history.
-    // This also feeds the Project Summary accordion's per-project hours
-    // badge below, which must match for the same reason.
-    const dateInfo = getDateInfoForMonth(year, month);
-    const monthFirstDate = dateInfo[0].date;
-    const monthLastDate = dateInfo[dateInfo.length - 1].date;
+    // Aggregate project totals for the selected employee, scoped to the
+    // selected date range. This also feeds the Project Summary accordion's
+    // per-project hours badge below.
 
     // Note: this still needs every matching timesheet_entries row to
     // compute the per-project sums in memory (Supabase's JS client has no
@@ -186,7 +184,7 @@ export default async function ReportsPage({
   // Detailed grid + PTO/overtime summary for selected employee
   let gridData = null;
   if (selectedEmployee) {
-    const dateInfo = getDateInfoForMonth(year, month);
+    const dateInfo = dateInfoForMonth;
     const firstDate = dateInfo[0].date;
     const lastDate = dateInfo[dateInfo.length - 1].date;
 
@@ -235,9 +233,7 @@ export default async function ReportsPage({
     const submittedMap = new Map((submittedDays ?? []).map((s) => [s.entry_date, Number(s.total_hours)]));
     const monthlyTotal = [...submittedMap.values()].reduce((a, b) => a + b, 0);
 
-    // Mirrors v1's /reports spv_hours_year/spv_banked_year: a genuinely
-    // separate YEAR-TO-DATE query (Jan 1 - Dec 31 of the selected year),
-    // not derived from the month-scoped entries fetched above.
+    // Special vacation totals are year-to-date, matching the original report behavior.
     const yearStart = `${year}-01-01`;
     const yearEnd = `${year}-12-31`;
     const { data: yearEntries, error: yearErr } = await supabaseAdmin

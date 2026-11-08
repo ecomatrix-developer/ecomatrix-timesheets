@@ -42,9 +42,9 @@ export const STANDARD_DAILY_HOURS = 7.75;
 // (see isWeekUnlocked in timesheetMath.ts) — deliberately NOT retroactive.
 // The gate only ever applies to a week whose PRECEDING week starts on or
 // after this date, so weeks already in progress or already open when this
-// feature shipped are never newly locked by it, and a brand-new employee's
-// very first week (no prior week exists yet) is never gated either.
-export const WEEK_GATE_ROLLOUT_DATE = "2026-10-08";
+// the week of Nov 9, 2026 remains open; the gate starts for the following
+// week, after employees have had the week of Nov 9 to submit.
+export const WEEK_GATE_ROLLOUT_DATE = "2026-11-09";
 // Standard 5-day week (informational; weekly submission is a legacy/unused
 // flow in v1 but kept here for parity).
 export const STANDARD_WEEKLY_HOURS = 38.75;
@@ -71,6 +71,12 @@ export const COMMENT_CATEGORIES = [
   "Reporting",
   "BIM-CAD",
   "BIM-REVIT",
+  "Content Writing",
+  "Linkedin marketing",
+  "SEO (Search Engine Optimization)",
+  "Email marketing",
+  "Website",
+  "Client Outreach",
   "Other",
 ] as const;
 

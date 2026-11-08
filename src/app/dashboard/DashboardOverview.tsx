@@ -58,6 +58,7 @@ export default function DashboardOverview({
   compliance,
   topProjects,
   overtimeFlags,
+  overtimeThreshold,
 }: {
   monthlyHours: MonthlyHoursPoint[];
   billableSplit: { billable: number; nonBillable: number };
@@ -66,6 +67,7 @@ export default function DashboardOverview({
   compliance: ComplianceEmployee[];
   topProjects: TopProjectHours[];
   overtimeFlags: { name: string; hours: number }[];
+  overtimeThreshold: number;
 }) {
   const compliantCount = compliance.filter((c) => c.compliant).length;
   const totalEmployees = compliance.length;
@@ -87,17 +89,17 @@ export default function DashboardOverview({
           <GlassCard className="p-4">
             <CountUpStat
               value={compliantCount}
-              label={`Compliant this week (of ${totalEmployees})`}
+              label={`Compliant in period (of ${totalEmployees})`}
               accent="#22c55e"
             />
           </GlassCard>
           <GlassCard className="p-4">
-            <CountUpStat value={overtimeFlags.length} label="Employees with high overtime" accent="#ef4444" />
+              <CountUpStat value={overtimeFlags.length} label={`Employees over ${overtimeThreshold}h overtime`} accent="#ef4444" />
           </GlassCard>
           <GlassCard className="p-4">
             <CountUpStat
               value={Math.round(monthlyHours.reduce((s, m) => s + m.billable + m.nonBillable, 0))}
-              label="Total hours (last 6 months)"
+              label="Total hours (selected period)"
               accent="#667eea"
             />
           </GlassCard>
@@ -109,7 +111,7 @@ export default function DashboardOverview({
             animate={{ opacity: 1, y: 0 }}
             className="glass p-4 lg:col-span-2"
           >
-            <h3 className="text-sm font-semibold mb-3">Monthly Hours Trend (Billable vs Non-Billable)</h3>
+            <h3 className="text-sm font-semibold mb-3">Hours Trend in Selected Period</h3>
             <div style={{ width: "100%", height: 280 }}>
               <ResponsiveContainer>
                 <BarChart data={monthlyHours} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
@@ -144,7 +146,7 @@ export default function DashboardOverview({
             transition={{ delay: 0.05 }}
             className="glass p-4"
           >
-            <h3 className="text-sm font-semibold mb-3">Billable vs Non-Billable (6mo)</h3>
+            <h3 className="text-sm font-semibold mb-3">Billable vs Non-Billable (Selected Period)</h3>
             <div style={{ width: "100%", height: 220 }}>
               <ResponsiveContainer>
                 <PieChart>
@@ -175,7 +177,7 @@ export default function DashboardOverview({
             className="glass p-4"
           >
             <h3 className="text-sm font-semibold mb-3 flex items-center gap-1.5">
-              <FaCheckCircle className="h-3.5 w-3.5 text-emerald-500" /> Submission Compliance (this week)
+              <FaCheckCircle className="h-3.5 w-3.5 text-emerald-500" /> Submission Compliance (selected period)
             </h3>
             <div className="space-y-1.5 max-h-56 overflow-y-auto scrollbar-thin">
               {compliance.length === 0 && <p className="text-sm text-muted">No employees found.</p>}
@@ -206,7 +208,7 @@ export default function DashboardOverview({
             className="glass p-4"
           >
             <h3 className="text-sm font-semibold mb-3 flex items-center gap-1.5">
-              <FaExclamationTriangle className="h-3.5 w-3.5 text-red-500" /> Overtime Flags (last 6 months)
+              <FaExclamationTriangle className="h-3.5 w-3.5 text-red-500" /> Overtime Flags (selected period)
             </h3>
             <div className="space-y-1.5 max-h-56 overflow-y-auto scrollbar-thin">
               {overtimeFlags.length === 0 ? (

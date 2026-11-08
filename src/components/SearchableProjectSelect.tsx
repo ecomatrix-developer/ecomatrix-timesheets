@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { FaSearch, FaTimes, FaPlus, FaCheck, FaFolderOpen, FaChevronDown } from "react-icons/fa";
 import type { Project } from "@/lib/types";
 
@@ -20,12 +21,21 @@ export default function SearchableProjectSelect({
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedType, setSelectedType] = useState<string>("All");
+  const [selectedStatus, setSelectedStatus] = useState<string>("All");
   const containerRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [panelRect, setPanelRect] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
 
   // Close dropdown on click outside
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(target) &&
+        panelRef.current &&
+        !panelRef.current.contains(target)
+      ) {
         setIsOpen(false);
       }
     }
@@ -33,9 +43,42 @@ export default function SearchableProjectSelect({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  const updatePanelRect = useCallback(() => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const desiredHeight = Math.min(448, window.innerHeight - 24);
+    const spaceBelow = window.innerHeight - rect.bottom - 12;
+    const spaceAbove = rect.top - 12;
+    const opensAbove = spaceBelow < Math.min(desiredHeight, 240) && spaceAbove > spaceBelow;
+    const height = Math.max(180, Math.min(desiredHeight, opensAbove ? spaceAbove : spaceBelow));
+    const width = Math.min(rect.width, window.innerWidth - 16);
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    setPanelRect({
+      top: opensAbove ? rect.top - height - 6 : rect.bottom + 6,
+      left,
+      width,
+      height,
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    updatePanelRect();
+    window.addEventListener("scroll", updatePanelRect, true);
+    window.addEventListener("resize", updatePanelRect);
+    return () => {
+      window.removeEventListener("scroll", updatePanelRect, true);
+      window.removeEventListener("resize", updatePanelRect);
+    };
+  }, [isOpen, updatePanelRect]);
+
   const types = ["All", "Energy Modelling", "BIM and AutoCad"];
+  const statuses = ["All", "active", "completed", "re-work", "archived"];
 
   const filteredProjects = projects.filter((p) => {
+    if (selectedStatus !== "All" && p.status !== selectedStatus) {
+      return false;
+    }
     // Filter by type pill
     if (selectedType !== "All" && p.project_type !== selectedType) {
       return false;
@@ -47,7 +90,8 @@ export default function SearchableProjectSelect({
       (p.name && p.name.toLowerCase().includes(term)) ||
       (p.project_number && p.project_number.toLowerCase().includes(term)) ||
       (p.client_name && p.client_name.toLowerCase().includes(term)) ||
-      (p.project_type && p.project_type.toLowerCase().includes(term))
+      (p.project_type && p.project_type.toLowerCase().includes(term)) ||
+      p.status.toLowerCase().includes(term)
     );
   });
 
@@ -78,10 +122,14 @@ export default function SearchableProjectSelect({
         />
       </div>
 
-      {isOpen && (
-        <div className="absolute left-0 right-0 top-full mt-2 z-50 bg-white rounded-xl shadow-xl border border-gray-200 p-3 max-h-96 flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-150">
+      {isOpen && panelRect && createPortal(
+        <div
+          ref={panelRef}
+          style={{ position: "fixed", top: panelRect.top, left: panelRect.left, width: panelRect.width, height: panelRect.height }}
+          className="z-[110] overflow-hidden bg-white rounded-xl shadow-xl border border-gray-200 p-3 flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-150"
+        >
           {/* Search Input Box */}
-          <div className="relative">
+          <div className="relative shrink-0">
             <input
               type="text"
               autoFocus
@@ -102,9 +150,29 @@ export default function SearchableProjectSelect({
             )}
           </div>
 
-          {/* Category Filter Pills */}
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 border-b border-gray-100 scrollbar-none">
-            <span className="text-[11px] font-semibold text-muted shrink-0 mr-1">Category:</span>
+          <div className="flex shrink-0 flex-nowrap items-center gap-1.5 overflow-x-auto pb-1 border-b border-gray-100 scrollbar-none">
+            <span className="text-[11px] font-semibold text-muted shrink-0 mr-1">Status:</span>
+            {statuses.map((status) => {
+              const active = selectedStatus === status;
+              return (
+                <button
+                  key={status}
+                  type="button"
+                  onClick={() => setSelectedStatus(status)}
+                  className={`shrink-0 text-xs px-2.5 py-1 rounded-full whitespace-nowrap border transition-all ${
+                    active
+                      ? "bg-accent text-white border-accent font-medium shadow-xs"
+                      : "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100"
+                  }`}
+                >
+                  {status === "All" ? "All" : status === "re-work" ? "Re-work" : status[0].toUpperCase() + status.slice(1)}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex shrink-0 flex-nowrap items-center gap-1.5 overflow-x-auto pb-1 border-b border-gray-100 scrollbar-none">
+            <span className="text-[11px] font-semibold text-muted shrink-0 mr-1">Project type:</span>
             {types.map((type) => {
               const active = selectedType === type;
               return (
@@ -112,7 +180,7 @@ export default function SearchableProjectSelect({
                   key={type}
                   type="button"
                   onClick={() => setSelectedType(type)}
-                  className={`text-xs px-2.5 py-1 rounded-full whitespace-nowrap border transition-all ${
+                  className={`shrink-0 text-xs px-2.5 py-1 rounded-full whitespace-nowrap border transition-all ${
                     active
                       ? "bg-accent text-white border-accent font-medium shadow-xs"
                       : "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100"
@@ -125,7 +193,7 @@ export default function SearchableProjectSelect({
           </div>
 
           {/* Options List */}
-          <div className="overflow-y-auto max-h-60 space-y-1 pr-1 scrollbar-thin">
+          <div className="min-h-0 flex-1 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
             {filteredProjects.length > 0 ? (
               filteredProjects.map((p) => {
                 const isAdded = addedProjectIds.has(p.id);
@@ -178,7 +246,8 @@ export default function SearchableProjectSelect({
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

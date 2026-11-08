@@ -6,6 +6,8 @@ import GlassCard from "@/components/GlassCard";
 import CountUpStat from "@/components/CountUpStat";
 import ReportTriggerPanel from "@/components/ReportTriggerPanel";
 import DatabaseStatsClient from "./DatabaseStatsClient";
+import DateRangePicker from "@/components/DateRangePicker";
+import { getDateBuckets, resolveDateRange } from "@/lib/dateRange";
 import { PAGE_SIZE } from "@/lib/constants";
 import type { PublicUser, Project } from "@/lib/types";
 import { FaDatabase } from "react-icons/fa";
@@ -40,13 +42,20 @@ interface TableSizeRow {
 export default async function DatabaseStatsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ usersPage?: string; projectsPage?: string }>;
+  searchParams: Promise<{
+    usersPage?: string;
+    projectsPage?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    datePreset?: string;
+  }>;
 }) {
   const session = await getSession();
   if (!session) redirect("/login");
   if (session.role !== "admin") redirect("/login");
 
   const resolvedSearchParams = await searchParams;
+  const dateRange = resolveDateRange(resolvedSearchParams);
   const usersPage = Math.max(1, parseInt(resolvedSearchParams.usersPage ?? "1", 10) || 1);
   const projectsPage = Math.max(1, parseInt(resolvedSearchParams.projectsPage ?? "1", 10) || 1);
 
@@ -58,6 +67,21 @@ export default async function DatabaseStatsPage({
     countRows("submitted_weeks"),
   ]);
   const totalRows = users + projects + entries + submittedDays + submittedWeeks;
+
+  const [periodEntries, periodSubmittedDays] = await Promise.all([
+    supabaseAdmin
+      .from("timesheet_entries")
+      .select("id", { count: "exact", head: true })
+      .gte("entry_date", dateRange.from)
+      .lte("entry_date", dateRange.to),
+    supabaseAdmin
+      .from("submitted_days")
+      .select("id", { count: "exact", head: true })
+      .gte("entry_date", dateRange.from)
+      .lte("entry_date", dateRange.to),
+  ]);
+  if (periodEntries.error) throw periodEntries.error;
+  if (periodSubmittedDays.error) throw periodSubmittedDays.error;
 
   // Real on-disk size via the get_database_size_stats() RPC (see
   // supabase_patch_3_database_size_rpc.sql). Falls back gracefully to
@@ -89,35 +113,25 @@ export default async function DatabaseStatsPage({
     .range(projectsFrom, projectsTo);
   if (projectsErr) throw projectsErr;
 
-  // Mirrors v1's "Monthly Entries (Last 6 Months)" breakdown — count
-  // timesheet_entries whose entry_date falls in each of the last 6
-  // calendar months, most recent first.
-  const now = new Date();
-  const monthlyStats: { label: string; count: number }[] = [];
-  for (let i = 0; i < 6; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const year = d.getFullYear();
-    const month = d.getMonth() + 1;
-    const monthStr = String(month).padStart(2, "0");
-    const startDate = `${year}-${monthStr}-01`;
-    const lastDay = new Date(year, month, 0).getDate();
-    const endDate = `${year}-${monthStr}-${String(lastDay).padStart(2, "0")}`;
-    const { count } = await supabaseAdmin
+  const rangeStats = await Promise.all(getDateBuckets(dateRange.from, dateRange.to).map(async (bucket) => {
+    const { count, error } = await supabaseAdmin
       .from("timesheet_entries")
-      .select("*", { count: "exact", head: true })
-      .gte("entry_date", startDate)
-      .lte("entry_date", endDate);
-    if (count && count > 0) {
-      monthlyStats.push({ label: `${year}-${monthStr}`, count });
-    }
-  }
+      .select("id", { count: "exact", head: true })
+      .gte("entry_date", bucket.from)
+      .lte("entry_date", bucket.to);
+    if (error) throw error;
+    return { label: bucket.label, count: count ?? 0 };
+  }));
 
   return (
     <PageTransition>
-      <div className="max-w-6xl mx-auto">
-        <h1 className="text-2xl font-semibold mb-6 flex items-center gap-2">
-          <FaDatabase className="text-accent" /> Database Statistics
-        </h1>
+      <div className="w-full">
+        <div className="mb-6 flex flex-col gap-4 border-b border-gray-200 pb-4 lg:flex-row lg:items-center lg:justify-between">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
+            <FaDatabase className="text-accent" /> Database Statistics
+          </h1>
+          <DateRangePicker from={dateRange.from} to={dateRange.to} preset={dateRange.preset} />
+        </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
           <GlassCard>
@@ -127,10 +141,10 @@ export default async function DatabaseStatsPage({
             <CountUpStat value={projects} label="Projects" accent="#22d3ee" />
           </GlassCard>
           <GlassCard>
-            <CountUpStat value={entries} label="Timesheet Entries" accent="#4ade80" />
+            <CountUpStat value={periodEntries.count ?? 0} label="Entries in Period" accent="#4ade80" />
           </GlassCard>
           <GlassCard>
-            <CountUpStat value={submittedDays} label="Submitted Days" accent="#facc15" />
+            <CountUpStat value={periodSubmittedDays.count ?? 0} label="Submitted Days in Period" accent="#facc15" />
           </GlassCard>
           <GlassCard>
             <CountUpStat value={submittedWeeks} label="Submitted Weeks" accent="#fb923c" />
@@ -177,11 +191,11 @@ export default async function DatabaseStatsPage({
           )}
         </GlassCard>
 
-        {monthlyStats.length > 0 && (
+        {rangeStats.length > 0 && (
           <GlassCard className="mb-6">
-            <h2 className="font-semibold mb-3 text-sm">Monthly Entries (Last 6 Months)</h2>
+            <h2 className="font-semibold mb-3 text-sm">Timesheet Entries in Selected Period</h2>
             <div className="flex flex-wrap gap-2">
-              {monthlyStats.map((m) => (
+              {rangeStats.map((m) => (
                 <div
                   key={m.label}
                   className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-sm"

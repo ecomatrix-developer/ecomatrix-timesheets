@@ -5,6 +5,7 @@ import type { Project } from "@/lib/types";
 import PageTransition from "@/components/PageTransition";
 import ProjectsClient from "./ProjectsClient";
 import { PAGE_SIZE } from "@/lib/constants";
+import { resolveDateRange } from "@/lib/dateRange";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,9 @@ export default async function ProjectsPage({
     project_type?: string | string[];
     search_term?: string;
     page?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    datePreset?: string;
   }>;
 }) {
   const session = await getSession();
@@ -23,6 +27,7 @@ export default async function ProjectsPage({
   if (session.role !== "admin") redirect("/dashboard");
 
   const resolvedSearchParams = await searchParams;
+  const dateRange = resolveDateRange(resolvedSearchParams);
   const statusesParam = resolvedSearchParams.status;
   // Default to "active" only when the status filter has never been touched
   // (no `status` key in the URL at all). Once the user clears every status
@@ -41,8 +46,25 @@ export default async function ProjectsPage({
   const searchTerm = (resolvedSearchParams.search_term ?? "").trim();
   const page = Math.max(1, parseInt(resolvedSearchParams.page ?? "1", 10) || 1);
 
+  const activeProjectIds = new Set<string>();
+  for (let offset = 0; ; offset += 1000) {
+    const { data: activeEntries, error: activityErr } = await supabaseAdmin
+      .from("timesheet_entries")
+      .select("project_id")
+      .not("project_id", "is", null)
+      .gte("entry_date", dateRange.from)
+      .lte("entry_date", dateRange.to)
+      .range(offset, offset + 999);
+    if (activityErr) throw activityErr;
+    for (const entry of activeEntries ?? []) {
+      if (entry.project_id) activeProjectIds.add(entry.project_id);
+    }
+    if (!activeEntries || activeEntries.length < 1000) break;
+  }
+
   function applyFilters(query: ReturnType<typeof supabaseAdmin.from>) {
     let q = query.select("*", { count: "exact" });
+    q = q.in("id", activeProjectIds.size > 0 ? [...activeProjectIds] : ["00000000-0000-0000-0000-000000000000"]);
     if (selectedStatuses.length > 0) {
       q = q.in("status", selectedStatuses);
     }
@@ -78,6 +100,7 @@ export default async function ProjectsPage({
     <PageTransition>
       <ProjectsClient
         projects={(data ?? []) as Project[]}
+        dateRange={dateRange}
         selectedStatuses={selectedStatuses}
         selectedTypes={selectedTypes}
         searchTerm={searchTerm}

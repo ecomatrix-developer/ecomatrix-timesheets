@@ -67,7 +67,7 @@ export default function Sidebar({ session }: { session: SessionPayload }) {
               }`}
             >
               <link.Icon className="h-5 w-5 shrink-0" />
-              <span className="truncate opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap">
+              <span className="truncate whitespace-nowrap">
                 {link.label}
               </span>
             </Link>
@@ -82,7 +82,7 @@ export default function Sidebar({ session }: { session: SessionPayload }) {
           className="flex items-center gap-3.5 rounded-xl px-3 py-2.5 text-sm font-medium text-white/80 hover:bg-white/10 hover:text-white transition-colors"
         >
           <FaEnvelope className="h-5 w-5 shrink-0" />
-          <span className="truncate opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap">
+          <span className="truncate whitespace-nowrap">
             Contact Us
           </span>
         </Link>
@@ -94,7 +94,7 @@ export default function Sidebar({ session }: { session: SessionPayload }) {
           className="w-full flex items-center gap-3.5 rounded-xl px-3 py-2.5 text-sm font-medium text-white/80 hover:bg-white/10 hover:text-white transition-colors text-left"
         >
           <FaSignOutAlt className="h-5 w-5 shrink-0" />
-          <span className="truncate opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap">
+          <span className="truncate whitespace-nowrap">
             Logout
           </span>
         </button>
@@ -104,35 +104,28 @@ export default function Sidebar({ session }: { session: SessionPayload }) {
 
   return (
     <>
-      {/* Desktop sidebar — collapsible on hover */}
+      {/* Desktop sidebar */}
       <aside
-        className="hidden md:flex flex-col fixed left-0 top-0 bottom-0 z-40 w-16 hover:w-64 group transition-all duration-300 ease-in-out shadow-2xl overflow-hidden"
+        className="hidden md:flex flex-col fixed left-0 top-0 bottom-0 z-40 w-64 shadow-2xl overflow-y-auto"
         style={{ background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)" }}
       >
-        <div className="flex h-full flex-col pt-6">
-          <div className="mb-6 px-2 overflow-hidden whitespace-nowrap">
-            <div className="relative h-9 px-2">
-              {/* Collapsed state: small dot-grid mark only */}
-              <div className="absolute inset-y-0 left-2 w-9 opacity-100 group-hover:opacity-0 transition-opacity duration-200">
-                <Image src="/icon.png" alt="Eco Matrix Engineering" fill className="object-contain" sizes="36px" priority />
-              </div>
-              {/* Expanded state: full wordmark (already includes the dot-grid mark) */}
-              <div className="absolute inset-y-0 left-2 w-40 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                <Image
-                  src="/logo-white.png"
-                  alt="Eco Matrix Engineering"
-                  fill
-                  className="object-contain object-left"
-                  sizes="160px"
-                  priority
-                />
-              </div>
+        <div className="flex min-h-full flex-col pt-6">
+          <div className="mb-6 px-4 whitespace-nowrap">
+            <div className="relative h-11 w-full rounded bg-white p-1">
+              <Image
+                src="/logo.png"
+                alt="Eco Matrix Engineering"
+                fill
+                className="object-contain object-left p-1"
+                sizes="224px"
+                priority
+              />
             </div>
-            <p className="text-white/70 text-xs mt-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 truncate px-3 text-left">
+            <p className="text-white/70 text-xs mt-2 truncate px-1 text-left">
               Welcome, {session.name}
             </p>
           </div>
-          <nav className="flex-1 overflow-y-auto scrollbar-none">{NavList}</nav>
+          <nav className="flex-1 scrollbar-none">{NavList}</nav>
         </div>
       </aside>
 
@@ -141,8 +134,8 @@ export default function Sidebar({ session }: { session: SessionPayload }) {
         className="md:hidden fixed top-0 left-0 right-0 z-40 flex items-center justify-between px-4 py-3 shadow"
         style={{ background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)" }}
       >
-        <div className="relative h-8 w-40">
-          <Image src="/logo-white.png" alt="Eco Matrix Engineering" fill className="object-contain object-left" sizes="160px" priority />
+        <div className="relative h-8 w-40 rounded bg-white p-1">
+          <Image src="/logo.png" alt="Eco Matrix Engineering" fill className="object-contain object-left p-1" sizes="160px" priority />
         </div>
         <button
           className="text-white p-2"
@@ -174,12 +167,12 @@ export default function Sidebar({ session }: { session: SessionPayload }) {
             >
               <div className="flex h-full flex-col pt-6">
                 <div className="mb-6 px-4">
-                  <div className="relative h-9 w-44 mb-2">
+                  <div className="relative h-9 w-44 mb-2 rounded bg-white p-1">
                     <Image
-                      src="/logo-white.png"
+                      src="/logo.png"
                       alt="Eco Matrix Engineering"
                       fill
-                      className="object-contain object-left"
+                      className="object-contain object-left p-1"
                       sizes="176px"
                       priority
                     />

@@ -22,6 +22,26 @@ body {
   min-height: 100vh;
 }
 
+.rdp-root.date-range-calendar {
+  --rdp-accent-color: #667eea;
+  --rdp-accent-background-color: #eef0ff;
+  --rdp-day-height: 30px;
+  --rdp-day-width: 30px;
+  --rdp-day_button-height: 28px;
+  --rdp-day_button-width: 28px;
+  --rdp-day_button-border-radius: 0.5rem;
+  --rdp-months-gap: 0.75rem;
+  font-size: 0.72rem;
+}
+
+.date-range-calendar .rdp-months {
+  flex-wrap: nowrap;
+}
+
+.date-range-calendar .rdp-month {
+  flex: 0 0 auto;
+}
+
 /* Card look matching v1's Bootstrap .card: border: none, soft shadow, rounded */
 .card-surface {
   background: var(--card-bg);

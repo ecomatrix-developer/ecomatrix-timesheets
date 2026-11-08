@@ -58,7 +58,7 @@ export default function DeleteOldEntriesClient({
   }
 
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="w-full">
       <h1 className="text-2xl font-semibold mb-6 flex items-center gap-2 text-red-600">
         <FaExclamationTriangle /> Delete Old Timesheet Entries
       </h1>

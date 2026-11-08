@@ -8,12 +8,12 @@ import type { DateInfo } from "@/lib/dateUtils";
 import type { GridEntryValue } from "@/components/TimesheetGrid";
 import TimesheetGrid from "@/components/TimesheetGrid";
 import { CATEGORIES_FOR_GRID } from "@/lib/constants";
-import { MONTH_NAMES } from "@/lib/dateUtils";
 import { reopenDayAction } from "@/app/(actions)/timesheetActions";
 import Pagination from "@/components/Pagination";
 import ProjectSummaryAccordion from "@/components/ProjectSummaryAccordion";
 import Select from "@/components/Select";
 import { PAGE_SIZE } from "@/lib/constants";
+import { MONTH_NAMES } from "@/lib/dateUtils";
 import { toast } from "@/lib/toast";
 import { FaDownload, FaUserCheck } from "react-icons/fa";
 
@@ -76,6 +76,9 @@ export default function ReportsClient({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const selectedEmployee = employees.find((e) => e.username === selectedUsername);
+  const reportStartDate = `${year}-${String(month).padStart(2, "0")}-01`;
+  const reportLastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const reportEndDate = `${year}-${String(month).padStart(2, "0")}-${String(reportLastDay).padStart(2, "0")}`;
 
   // Changing employee/month/year resets both lists back to page 1 — the
   // new filter combination may have far fewer pages than before.
@@ -174,18 +177,18 @@ export default function ReportsClient({
   }
 
   return (
-    <div className="max-w-6xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+    <div className="w-full">
+      <div className="mb-6 flex flex-col gap-4 border-b border-gray-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-semibold">Reports &amp; Analytics</h1>
         <a
-          href="/api/export/csv"
+          href={`/api/export/csv?${new URLSearchParams({ dateFrom: reportStartDate, dateTo: reportEndDate }).toString()}`}
           className="btn-primary inline-flex items-center gap-2 px-4 py-2 text-sm"
         >
           <FaDownload className="h-3 w-3" /> Export CSV
         </a>
       </div>
 
-      <div className="glass p-4 mb-6 flex flex-col sm:flex-row gap-3 sm:items-end">
+      <div className="glass p-4 mb-6 flex flex-col gap-3 sm:flex-row sm:items-end">
         <div className="flex-1">
           <label className="text-xs text-muted block mb-1">Employee</label>
           <Select
@@ -195,12 +198,12 @@ export default function ReportsClient({
             options={employees.map((e) => ({ value: e.username, label: e.name }))}
           />
         </div>
-        <div className="sm:w-48">
+        <div className="sm:w-44">
           <label className="text-xs text-muted block mb-1">Month</label>
           <Select
             value={String(month)}
             onChange={(value) => updateParams({ month: parseInt(value, 10) })}
-            options={MONTH_NAMES.map((m, i) => ({ value: String(i + 1), label: m }))}
+            options={MONTH_NAMES.map((name, index) => ({ value: String(index + 1), label: name }))}
           />
         </div>
         <div>
@@ -208,7 +211,7 @@ export default function ReportsClient({
           <input
             type="number"
             value={year}
-            onChange={(e) => updateParams({ year: parseInt(e.target.value, 10) })}
+            onChange={(event) => updateParams({ year: parseInt(event.target.value, 10) })}
             className="glass-input w-24 px-3 py-2.5 text-sm"
           />
         </div>
@@ -236,16 +239,13 @@ export default function ReportsClient({
                   <p className="text-xs text-muted">PTO Summary</p>
                   <p className="text-2xl font-semibold text-amber-500">{gridData.ptoSummary.toFixed(2)}h</p>
                 </div>
-                {/* Matches v1's Reports page exactly: Vacation Summary is
-                    month-scoped (same range as PTO above); Special Vacation is
-                    a YEAR-TO-DATE figure, a separate query from everything
-                    else on this card row. */}
+                {/* Vacation summaries are month-scoped; special vacation remains year-to-date. */}
                 <div className="glass p-4">
                   <p className="text-xs text-muted">Vacation Summary</p>
                   <p className="text-2xl font-semibold text-cyan-500">{gridData.vacationSummary.toFixed(2)}h</p>
                 </div>
                 <div className="glass p-4">
-                  <p className="text-xs text-muted">Special Vacation (Year)</p>
+                  <p className="text-xs text-muted">Special Vacation</p>
                   <p className="text-2xl font-semibold text-amber-500">
                     {(gridData.specialVacationYear + gridData.specialVacationBankedYear).toFixed(2)}h
                   </p>

@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState, useCallback, useRef } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   FaChevronLeft,
   FaChevronRight,
@@ -46,6 +47,13 @@ interface RowDef {
   target: CellTarget;
 }
 
+interface HoveredComment {
+  anchorRect: DOMRect;
+  label: string;
+  date: string;
+  text: string;
+}
+
 /**
  * A project-row comment is stored as a JSON array of {hours, category,
  * detail?} breakdowns (written by CommentModal's structured form); a
@@ -75,67 +83,40 @@ function summarizeCommentForTooltip(comment: string | undefined): string {
   return trimmed;
 }
 
-/**
- * Floating comment popover, rendered via a portal into document.body so it
- * can appear above the grid's horizontally-scrolling container instead of
- * being clipped by its `overflow-x-auto` — fixed-positioned from the
- * hovered icon's real screen coordinates, and flips to the right side of
- * the icon (instead of centering under it) whenever it would otherwise run
- * off the right edge of the viewport.
- */
-function CommentHoverPopover({
-  anchorRect,
-  label,
-  date,
-  text,
+function CommentHoverCard({
+  comment,
+  onMouseEnter,
+  onMouseLeave,
 }: {
-  anchorRect: DOMRect;
-  label: string;
-  date: string;
-  text: string;
+  comment: HoveredComment;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
 }) {
-  const POPOVER_WIDTH = 224; // matches w-56 below
-  const MARGIN = 8;
-  const wouldOverflowRight = anchorRect.left + POPOVER_WIDTH / 2 > window.innerWidth - MARGIN;
-  const wouldOverflowLeft = anchorRect.left - POPOVER_WIDTH / 2 < MARGIN;
-
-  let left: number;
-  let translateX: string;
-  if (wouldOverflowRight) {
-    left = anchorRect.right;
-    translateX = "-100%";
-  } else if (wouldOverflowLeft) {
-    left = anchorRect.left;
-    translateX = "0%";
-  } else {
-    left = anchorRect.left + anchorRect.width / 2;
-    translateX = "-50%";
-  }
-
-  const top = anchorRect.top - 8;
+  const width = Math.min(320, window.innerWidth - 16);
+  const left = Math.min(
+    Math.max(8, comment.anchorRect.left + comment.anchorRect.width / 2 - width / 2),
+    window.innerWidth - width - 8
+  );
+  const top = comment.anchorRect.bottom + 8 + 180 < window.innerHeight
+    ? comment.anchorRect.bottom + 8
+    : Math.max(8, comment.anchorRect.top - 188);
 
   return createPortal(
-    <AnimatePresence>
-      <motion.div
-        initial={{ opacity: 0, y: 4, scale: 0.97 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 4, scale: 0.97 }}
-        transition={{ duration: 0.12 }}
-        style={{
-          position: "fixed",
-          top,
-          left,
-          transform: `translate(${translateX}, -100%)`,
-          width: POPOVER_WIDTH,
-        }}
-        className="z-[100] rounded-lg bg-gray-900 text-white text-[11px] leading-snug px-2.5 py-2 shadow-lg pointer-events-none"
-      >
-        <p className="font-semibold mb-0.5">
-          {label} — {date}
-        </p>
-        <p className="whitespace-pre-wrap text-gray-200">{text}</p>
-      </motion.div>
-    </AnimatePresence>,
+    <div
+      role="tooltip"
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      style={{ position: "fixed", top, left, width, maxHeight: "min(280px, calc(100dvh - 16px))" }}
+      className="z-[110] overflow-hidden rounded-lg border border-gray-200 bg-white text-left shadow-2xl"
+    >
+      <div className="border-b border-gray-100 bg-gray-50 px-3 py-2">
+        <p className="truncate text-xs font-semibold text-gray-800">{comment.label}</p>
+        <p className="text-[11px] text-muted">{comment.date}</p>
+      </div>
+      <div className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words px-3 py-2.5 text-xs leading-relaxed text-gray-700">
+        {comment.text}
+      </div>
+    </div>,
     document.body
   );
 }
@@ -194,21 +175,28 @@ export default function TimesheetGrid({
     target: CellTarget;
     date: string;
   } | null>(null);
-  // Read-only mode (Reports page) has no edit modal — hovering a cell's
-  // comment icon shows a small floating popover with the saved text.
-  // Rendered via a portal into document.body (see CommentHoverPopover
-  // below) so it can float above the grid's horizontally-scrolling
-  // container instead of being clipped by its overflow-x-auto — a plain
-  // absolutely-positioned child was getting cut off for any cell near the
-  // right edge of the scroll area.
-  const [hoveredComment, setHoveredComment] = useState<{
-    key: string;
-    anchorRect: DOMRect;
-    label: string;
-    date: string;
-    text: string;
-  } | null>(null);
+  const [hoveredComment, setHoveredComment] = useState<HoveredComment | null>(null);
+  const commentHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  function showCommentHover(event: ReactMouseEvent<HTMLButtonElement>, label: string, date: string, text: string) {
+    if (commentHoverTimer.current) clearTimeout(commentHoverTimer.current);
+    setHoveredComment({ anchorRect: event.currentTarget.getBoundingClientRect(), label, date, text });
+  }
+
+  function dismissCommentHoverSoon() {
+    if (commentHoverTimer.current) clearTimeout(commentHoverTimer.current);
+    commentHoverTimer.current = setTimeout(() => setHoveredComment(null), 180);
+  }
+
+  function keepCommentHover() {
+    if (commentHoverTimer.current) clearTimeout(commentHoverTimer.current);
+  }
+
+  function openComment(rowKey: string, target: CellTarget, date: string) {
+    if (commentHoverTimer.current) clearTimeout(commentHoverTimer.current);
+    setHoveredComment(null);
+    setCommentTarget({ rowKey, target, date });
+  }
   const projectsById = useMemo(() => {
     const map: Record<string, Project> = {};
     for (const p of projects) map[p.id] = p;
@@ -231,7 +219,7 @@ export default function TimesheetGrid({
       .filter((p): p is Project => !!p)
       .map((p) => ({
         key: `p:${p.id}`,
-        label: `${p.client_name} — ${p.name}`,
+        label: `${p.project_number ? `#${p.project_number} - ` : ""}${p.client_name} - ${p.name}`,
         target: { projectId: p.id, category: null },
       }));
     const categoryRows: RowDef[] = categories.map((c) => ({
@@ -474,6 +462,7 @@ export default function TimesheetGrid({
     target: CellTarget,
     hours: number
   ): "pto-cap" | "quarter-hour" | null {
+    if (!Number.isFinite(hours)) return "quarter-hour";
     const categoryKey = (target.category ?? "").trim().toUpperCase();
     if ((categoryKey === "PTO" || categoryKey === "PTO BANKING") && hours > PTO_SINGLE_DAY_CAP) {
       return "pto-cap";
@@ -877,8 +866,25 @@ export default function TimesheetGrid({
                 transition={{ delay: Math.min(ri * 0.01, 0.3) }}
                 className="border-b border-gray-100 hover:bg-gray-50"
               >
-                <td className="sticky left-0 z-10 bg-white px-3 py-1.5 whitespace-nowrap max-w-[260px] overflow-hidden text-ellipsis border-r border-gray-100">
-                  {row.label}
+                <td
+                  title={row.label}
+                  className="sticky left-0 z-10 bg-white px-3 py-1.5 min-w-[220px] max-w-[260px] overflow-hidden border-r border-gray-100"
+                >
+                  {row.target.projectId ? (
+                    <div className="space-y-0.5 leading-tight">
+                      {projectsById[row.target.projectId]?.project_number && (
+                        <p className="text-[10px] font-semibold text-accent truncate">
+                          #{projectsById[row.target.projectId].project_number}
+                        </p>
+                      )}
+                      <p className="text-xs font-medium truncate">
+                        {projectsById[row.target.projectId]?.client_name}
+                      </p>
+                      <p className="text-[11px] text-muted truncate">
+                        {projectsById[row.target.projectId]?.name}
+                      </p>
+                    </div>
+                  ) : row.label}
                 </td>
                 {dateInfo.map((d) => {
                   const cellVal = localData[d.date]?.[row.key];
@@ -909,7 +915,16 @@ export default function TimesheetGrid({
                           title={commentTooltip}
                           onChange={(e) => {
                             const input = e.target;
-                            const hours = parseFloat(input.value) || 0;
+                            const rawValue = input.value.trim();
+                            const hours = rawValue === "" ? 0 : Number(rawValue);
+                            const problem = validateHoursInput(row.target, hours);
+                            if (problem) return;
+                            handleCellChange(row.key, row.target, d.date, hours, cellVal?.comment ?? "");
+                          }}
+                          onBlur={(e) => {
+                            const input = e.target;
+                            const rawValue = input.value.trim();
+                            const hours = rawValue === "" ? 0 : Number(rawValue);
                             const problem = validateHoursInput(row.target, hours);
                             if (problem === "pto-cap") {
                               toast.error(
@@ -922,7 +937,7 @@ export default function TimesheetGrid({
                               toast.error(
                                 "Invalid entry. Please enter hours in multiples of 0.25 (e.g., 1.25, 1.5, 1.75)."
                               );
-                              input.value = "";
+                              input.value = cellVal?.hours ? String(cellVal.hours) : "";
                               return;
                             }
                             handleCellChange(row.key, row.target, d.date, hours, cellVal?.comment ?? "");
@@ -934,11 +949,11 @@ export default function TimesheetGrid({
                         {!readOnly && (
                           <button
                             type="button"
-                            disabled={isLocked}
-                            title={commentPresent ? "Edit comment" : "Add comment"}
-                            onClick={() =>
-                              setCommentTarget({ rowKey: row.key, target: row.target, date: d.date })
-                            }
+                            disabled={isLocked && !commentPresent}
+                            aria-label={isLocked ? "View comment" : commentPresent ? "Edit comment" : "Add comment"}
+                            onClick={() => openComment(row.key, row.target, d.date)}
+                            onMouseEnter={(event) => commentPresent && showCommentHover(event, row.label, d.date, commentTooltip)}
+                            onMouseLeave={dismissCommentHoverSoon}
                             className={`shrink-0 h-5 w-5 rounded flex items-center justify-center text-[9px] ${
                               commentPresent
                                 ? "bg-sky-500 text-white"
@@ -949,21 +964,16 @@ export default function TimesheetGrid({
                           </button>
                         )}
                         {readOnly && commentPresent && (
-                          <span
-                            className="h-5 w-5 rounded flex items-center justify-center text-[9px] bg-sky-100 text-sky-600 cursor-default shrink-0"
-                            onMouseEnter={(e) =>
-                              setHoveredComment({
-                                key: debounceKey,
-                                anchorRect: e.currentTarget.getBoundingClientRect(),
-                                label: row.label,
-                                date: d.date,
-                                text: commentTooltip,
-                              })
-                            }
-                            onMouseLeave={() => setHoveredComment(null)}
+                          <button
+                            type="button"
+                            aria-label={`View comment for ${row.label} on ${d.date}`}
+                            onClick={() => openComment(row.key, row.target, d.date)}
+                            onMouseEnter={(event) => showCommentHover(event, row.label, d.date, commentTooltip)}
+                            onMouseLeave={dismissCommentHoverSoon}
+                            className="h-5 w-5 rounded flex items-center justify-center text-[9px] bg-sky-100 text-sky-700 hover:bg-sky-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-600 shrink-0"
                           >
                             <FaCommentAlt className="h-2 w-2" />
-                          </span>
+                          </button>
                         )}
                       </div>
                     </td>
@@ -1048,6 +1058,12 @@ export default function TimesheetGrid({
         open={!!commentTarget}
         onClose={() => setCommentTarget(null)}
         isProject={!!commentTarget?.target.projectId}
+        readOnly={readOnly || (!!commentTarget && (locked.has(commentTarget.date) || !weekUnlockedByDate[commentTarget.date]))}
+        displayComment={
+          commentTarget
+            ? summarizeCommentForTooltip(localData[commentTarget.date]?.[commentTarget.rowKey]?.comment)
+            : ""
+        }
         initialComment={
           commentTarget
             ? localData[commentTarget.date]?.[commentTarget.rowKey]?.comment ?? ""
@@ -1058,13 +1074,13 @@ export default function TimesheetGrid({
       />
 
       {hoveredComment && (
-        <CommentHoverPopover
-          anchorRect={hoveredComment.anchorRect}
-          label={hoveredComment.label}
-          date={hoveredComment.date}
-          text={hoveredComment.text}
+        <CommentHoverCard
+          comment={hoveredComment}
+          onMouseEnter={keepCommentHover}
+          onMouseLeave={dismissCommentHoverSoon}
         />
       )}
+
     </div>
   );
 }

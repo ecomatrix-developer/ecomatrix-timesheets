@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   BarChart,
@@ -19,8 +19,9 @@ import {
   Legend,
 } from "recharts";
 import { FaChartPie } from "react-icons/fa";
-import { MONTH_NAMES } from "@/lib/dateUtils";
 import Select from "@/components/Select";
+import DateRangePicker from "@/components/DateRangePicker";
+import type { DateRange } from "@/lib/dateRange";
 
 const PALETTE = [
   "#8b5cf6",
@@ -61,9 +62,7 @@ export default function InsightsClient({
   projects,
   selectedEmployee,
   selectedProject,
-  selectedTime,
-  selectedMonth,
-  selectedYear,
+  dateRange,
 }: {
   projectData: { name: string; hours: number }[];
   employeeData: { name: string; hours: number }[];
@@ -75,35 +74,29 @@ export default function InsightsClient({
   projects: { id: string; name: string }[];
   selectedEmployee: string;
   selectedProject: string;
-  selectedTime: string;
-  selectedMonth: number;
-  selectedYear: number;
+  dateRange: DateRange;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [tab, setTab] = useState<Tab>("hours_per_project");
 
-  function updateEnergyFilter(next: {
-    employee_filter?: string;
-    project_filter?: string;
-    time_filter?: string;
-    month?: number;
-    year?: number;
-  }) {
-    const params = new URLSearchParams();
+  function updateEnergyFilter(next: { employee_filter?: string; project_filter?: string }) {
+    const params = new URLSearchParams(searchParams.toString());
     params.set("graph", "energy_modeling_hours");
     params.set("employee_filter", next.employee_filter ?? selectedEmployee);
     params.set("project_filter", next.project_filter ?? selectedProject);
-    params.set("time_filter", next.time_filter ?? selectedTime);
-    params.set("month", String(next.month ?? selectedMonth));
-    params.set("year", String(next.year ?? selectedYear));
     router.push(`/insights?${params.toString()}`);
+    router.refresh();
   }
 
   return (
-    <div className="max-w-6xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-6 flex items-center gap-2">
-        <FaChartPie className="text-accent" /> Insights &amp; Visualizations
-      </h1>
+    <div className="w-full">
+      <div className="mb-6 flex flex-col gap-4 border-b border-gray-200 pb-4 lg:flex-row lg:items-center lg:justify-between">
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
+          <FaChartPie className="text-accent" /> Insights &amp; Visualizations
+        </h1>
+        <DateRangePicker from={dateRange.from} to={dateRange.to} preset={dateRange.preset} />
+      </div>
 
       <div className="glass p-1.5 inline-flex flex-wrap gap-1 mb-6">
         {(
@@ -112,7 +105,7 @@ export default function InsightsClient({
             ["hours_per_employee", "Hours per Employee"],
             ["energy_modeling_hours", "Energy Modeling Category Hours"],
             ["billable_split", "Billable vs Non-Billable"],
-            ["monthly_trend", "Monthly Hours Trend"],
+            ["monthly_trend", "Hours Trend"],
             ["project_status", "Project Status Breakdown"],
           ] as [Tab, string][]
         ).map(([key, label]) => (
@@ -153,38 +146,6 @@ export default function InsightsClient({
               options={[{ value: "all", label: "All Projects" }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
             />
           </div>
-          <div className="w-44">
-            <label className="text-xs text-muted block mb-1">Time Period</label>
-            <Select
-              value={selectedTime}
-              onChange={(value) => updateEnergyFilter({ time_filter: value })}
-              options={[
-                { value: "month", label: "Specific Month" },
-                { value: "all_time", label: "All Time" },
-              ]}
-            />
-          </div>
-          {selectedTime === "month" && (
-            <>
-              <div className="w-40">
-                <label className="text-xs text-muted block mb-1">Month</label>
-                <Select
-                  value={String(selectedMonth)}
-                  onChange={(value) => updateEnergyFilter({ month: parseInt(value, 10) })}
-                  options={MONTH_NAMES.map((m, i) => ({ value: String(i + 1), label: m }))}
-                />
-              </div>
-              <div>
-                <label className="text-xs text-muted block mb-1">Year</label>
-                <input
-                  type="number"
-                  value={selectedYear}
-                  onChange={(e) => updateEnergyFilter({ year: parseInt(e.target.value, 10) })}
-                  className="glass-input w-24 px-3 py-1.5 text-sm"
-                />
-              </div>
-            </>
-          )}
         </div>
       )}
 

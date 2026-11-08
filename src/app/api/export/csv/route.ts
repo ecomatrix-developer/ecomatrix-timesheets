@@ -1,11 +1,12 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getAllProjects, getAllUsers, toProjectMap, toUserMap } from "@/lib/data";
+import { resolveDateRange } from "@/lib/dateRange";
 
 // Mirrors v1's /export/csv: admin exports every entry, an employee exports
 // only their own. Same columns: Employee, Date, Project/Category, Hours, Comments.
-export async function GET() {
+export async function GET(request: NextRequest) {
   const session = await getSession();
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
@@ -14,10 +15,17 @@ export async function GET() {
   const [projects, users] = await Promise.all([getAllProjects(), getAllUsers()]);
   const projectMap = toProjectMap(projects);
   const userMap = toUserMap(users);
+  const dateRange = resolveDateRange({
+    dateFrom: request.nextUrl.searchParams.get("dateFrom") ?? undefined,
+    dateTo: request.nextUrl.searchParams.get("dateTo") ?? undefined,
+    datePreset: request.nextUrl.searchParams.get("datePreset") ?? undefined,
+  });
 
   let query = supabaseAdmin
     .from("timesheet_entries")
     .select("employee_id, entry_date, project_id, category, hours, comment")
+    .gte("entry_date", dateRange.from)
+    .lte("entry_date", dateRange.to)
     .order("employee_id")
     .order("entry_date");
 

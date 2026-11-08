@@ -40,7 +40,7 @@ export default async function TimesheetPage({
 
   const [{ data: allProjects, error: projErr }, { data: entries, error: entErr }, { data: submitted, error: subErr }] =
     await Promise.all([
-      supabaseAdmin.from("projects").select("*").neq("status", "archived").order("name"),
+      supabaseAdmin.from("projects").select("*").order("name"),
       supabaseAdmin
         .from("timesheet_entries")
         .select("*")

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import Link from "next/link";
 import "./globals.css";
+import "react-day-picker/style.css";
 import { getSession } from "@/lib/session";
 import Sidebar from "@/components/Sidebar";
 import ToastProvider from "@/components/ToastProvider";
@@ -16,9 +17,9 @@ export const metadata: Metadata = {
   title: "Timesheet | Eco Matrix Solutions",
   description: "Employee timesheet & project tracking — v2",
   icons: {
-    icon: [{ url: "/icon.png", type: "image/png" }],
-    shortcut: "/favicon.ico",
-    apple: "/apple-icon.png",
+    icon: [{ url: "/favicon.png", type: "image/png", sizes: "512x512" }],
+    shortcut: "/favicon.png",
+    apple: "/favicon.png",
   },
 };
 
@@ -37,14 +38,14 @@ export default async function RootLayout({
         <main
           className={
             session
-              ? "pt-20 px-4 pb-12 md:pt-6 md:pb-8 md:pl-20 md:pr-6 min-h-screen transition-all duration-300"
+              ? "pt-20 px-4 pb-12 md:pt-6 md:pb-8 md:pl-[17rem] md:pr-6 min-h-screen min-w-0"
               : "min-h-screen"
           }
         >
           {children}
         </main>
         {session ? (
-          <footer className="hidden md:block md:pl-20 py-3 text-center text-sm text-muted border-t border-black/5 transition-all duration-300">
+          <footer className="hidden md:block md:pl-[17rem] py-3 text-center text-sm text-muted border-t border-black/5">
             © {new Date().getFullYear()} Ecomatrix Solutions. All Rights Reserved.
             {" | "}
             <Link href="/contact" className="text-accent hover:underline">

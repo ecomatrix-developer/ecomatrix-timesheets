@@ -70,7 +70,7 @@ export default function CreateEmployeeClient({ employees }: { employees: PublicU
   }
 
   return (
-    <div className="max-w-5xl mx-auto">
+    <div className="w-full">
       <h1 className="text-2xl font-semibold mb-6 flex items-center gap-2">
         <FaUserPlus className="text-accent" /> Create Employee
       </h1>

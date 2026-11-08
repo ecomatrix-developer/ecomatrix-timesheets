@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { FaTimes, FaPlus, FaTrash } from "react-icons/fa";
 import { COMMENT_CATEGORIES } from "@/lib/constants";
@@ -26,6 +27,8 @@ export default function CommentModal({
   open,
   onClose,
   isProject,
+  readOnly = false,
+  displayComment = "",
   initialComment,
   onSaveStructured,
   onSaveSimple,
@@ -33,12 +36,17 @@ export default function CommentModal({
   open: boolean;
   onClose: () => void;
   isProject: boolean;
+  readOnly?: boolean;
+  displayComment?: string;
   initialComment: string;
   onSaveStructured: (rows: CommentRow[], totalHours: number) => void;
   onSaveSimple: (text: string) => void;
 }) {
+  const [mounted, setMounted] = useState(false);
   const [rows, setRows] = useState<CommentRow[]>([]);
   const [simpleText, setSimpleText] = useState("");
+
+  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     if (!open) return;
@@ -90,17 +98,19 @@ export default function CommentModal({
     onSaveStructured(kept, total);
   }
 
-  return (
+  if (!mounted) return null;
+
+  return createPortal((
     <AnimatePresence>
       {open && (
         <motion.div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          className="fixed inset-0 z-[120] flex items-center justify-center overflow-y-auto p-4 sm:p-6"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
         >
           <motion.div
-            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            className="absolute inset-0 bg-black/65"
             onClick={onClose}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -111,14 +121,14 @@ export default function CommentModal({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 12 }}
             transition={{ type: "spring", stiffness: 340, damping: 28 }}
-            className={`relative glass-strong w-full ${
+            className={`relative my-auto w-full rounded-xl border border-gray-200 bg-white shadow-2xl ${
               isProject ? "max-w-2xl" : "max-w-md"
-            } max-h-[85vh] overflow-y-auto scrollbar-thin text-foreground`}
+            } max-h-[calc(100dvh-2rem)] overflow-y-auto scrollbar-thin text-foreground`}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
               <h3 className="font-semibold text-base">
-                {isProject ? "Add Detailed Comment" : "Add Comment"}
+                {readOnly ? "View Comment" : isProject ? "Add Detailed Comment" : "Add Comment"}
               </h3>
               <button onClick={onClose} className="text-muted hover:text-foreground p-1.5 rounded-lg hover:bg-gray-100 transition-colors">
                 <FaTimes className="h-4 w-4" />
@@ -126,8 +136,16 @@ export default function CommentModal({
             </div>
 
             <div className="p-5">
-              {isProject ? (
+              {readOnly ? (
+                <p className="text-sm whitespace-pre-wrap break-words">{displayComment || "No comment saved."}</p>
+              ) : isProject ? (
                 <>
+                  {displayComment && (
+                    <div className="mb-4 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2.5">
+                      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-sky-700">Saved comment</p>
+                      <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-gray-700">{displayComment}</p>
+                    </div>
+                  )}
                   <p className="text-sm text-muted mb-4">
                     Log hours according to categories. The grid cell&apos;s total
                     will be updated to match the sum below.
@@ -210,16 +228,18 @@ export default function CommentModal({
               <button onClick={onClose} className="btn-ghost px-4 py-2 text-sm">
                 Close
               </button>
-              <button
-                onClick={isProject ? handleSaveStructured : () => onSaveSimple(simpleText)}
-                className="btn-primary px-4 py-2 text-sm"
-              >
-                Save Comment
-              </button>
+              {!readOnly && (
+                <button
+                  onClick={isProject ? handleSaveStructured : () => onSaveSimple(simpleText)}
+                  className="btn-primary px-4 py-2 text-sm"
+                >
+                  Save Comment
+                </button>
+              )}
             </div>
           </motion.div>
         </motion.div>
       )}
     </AnimatePresence>
-  );
+  ), document.body);
 }

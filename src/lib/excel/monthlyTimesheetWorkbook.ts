@@ -65,6 +65,12 @@ import type { Project, PublicUser } from "@/lib/types";
  * everywhere it appears — summary sections and every employee's rows —
  * mirroring the original template's per-project color coding so a project
  * can be visually traced across the whole sheet.
+ *
+ * Two export modes (see `buildMonthlyTimesheetWorkbook`'s `clientNames`
+ * option): the default "consolidated" export is one sheet with every
+ * project across every client; the "client-wise" export instead produces
+ * one sheet per selected client (same workbook/file, one tab each), each
+ * scoped to only that client's own projects and hours.
  */
 
 type Bucket = "Energy" | "Cad" | "Revit" | "Other";
@@ -264,15 +270,44 @@ interface SummaryRowRef {
   row: number;
 }
 
+// Excel worksheet names can't contain : \ / ? * [ ] and are capped at 31
+// chars — used both for the default single-sheet name and for the one
+// client-wise sheet per selected client.
+const INVALID_SHEET_NAME_CHARS = /[:\\/?*[\]]/g;
+
+function sanitizeSheetName(name: string): string {
+  const cleaned = name.replace(INVALID_SHEET_NAME_CHARS, "-").trim();
+  return (cleaned.length > 31 ? cleaned.slice(0, 31) : cleaned) || "Sheet";
+}
+
+/** Dedupes sheet names (e.g. two clients that truncate to the same 31 chars). */
+function uniqueSheetName(used: Set<string>, desired: string): string {
+  const base = sanitizeSheetName(desired);
+  let candidate = base;
+  let n = 2;
+  while (used.has(candidate)) {
+    const suffix = ` (${n})`;
+    candidate = sanitizeSheetName(base.slice(0, 31 - suffix.length) + suffix);
+    n++;
+  }
+  used.add(candidate);
+  return candidate;
+}
+
 /**
  * Pure render step — given the aggregated hours plus the project/employee
- * lookups, builds the actual workbook. Kept separate from the DB fetch so
- * the formula/layout logic can be exercised with synthetic data in a test.
+ * lookups, builds one worksheet. Kept separate from the DB fetch so the
+ * formula/layout logic can be exercised with synthetic data in a test.
+ *
+ * Pass `opts.workbook` to append this sheet onto an existing workbook
+ * (used for the client-wise export, which puts one sheet per selected
+ * client into a single file) — otherwise a fresh workbook is created.
  */
 export function renderMonthlyTimesheetWorkbook(
   aggregation: MonthlyAggregation,
   projects: Project[],
-  users: PublicUser[]
+  users: PublicUser[],
+  opts: { workbook?: ExcelJS.Workbook; sheetName?: string; clientLabel?: string } = {}
 ): ExcelJS.Workbook {
   const { year, month, daysInMonth, rows } = aggregation;
   const projectMap = toProjectMap(projects);
@@ -292,10 +327,12 @@ export function renderMonthlyTimesheetWorkbook(
   const dayLetter = (weekday: number) => ["M", "T", "W", "T", "F", "S", "S"][weekday];
   const isWeekendCol = (dayIndex: number) => dateInfo[dayIndex].weekday >= 5;
 
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Ecomatrix Timesheets";
-  workbook.created = new Date();
-  const sheetName = `${MONTH_NAMES[month - 1].slice(0, 3)} ${year}`;
+  const workbook = opts.workbook ?? new ExcelJS.Workbook();
+  if (!opts.workbook) {
+    workbook.creator = "Ecomatrix Timesheets";
+    workbook.created = new Date();
+  }
+  const sheetName = sanitizeSheetName(opts.sheetName ?? `${MONTH_NAMES[month - 1].slice(0, 3)} ${year}`);
   const ws = workbook.addWorksheet(sheetName, {
     views: [{ state: "frozen", xSplit: 2, ySplit: 9 }],
   });
@@ -350,7 +387,10 @@ export function renderMonthlyTimesheetWorkbook(
 
   // ---- Title ----
   ws.mergeCells(1, 2, 1, Math.min(lastCol, 9));
-  setCell(1, 2, `Monthly Timesheet — ${MONTH_NAMES[month - 1]} ${year}`, {
+  const titleText = opts.clientLabel
+    ? `Monthly Timesheet — ${opts.clientLabel} — ${MONTH_NAMES[month - 1]} ${year}`
+    : `Monthly Timesheet — ${MONTH_NAMES[month - 1]} ${year}`;
+  setCell(1, 2, titleText, {
     bold: true,
     size: 14,
     color: TITLE_COLOR,
@@ -360,7 +400,12 @@ export function renderMonthlyTimesheetWorkbook(
   ws.getRow(1).height = 22;
 
   setCell(3, 2, "Name:", { bold: true, size: 9, color: LABEL_COLOR, align: "left" });
-  setCell(4, 2, "Client:", { bold: true, size: 9, color: LABEL_COLOR, align: "left" });
+  setCell(4, 2, opts.clientLabel ? `Client: ${opts.clientLabel}` : "Client:", {
+    bold: true,
+    size: 9,
+    color: LABEL_COLOR,
+    align: "left",
+  });
 
   // ---- Weekday / date header ----
   const weekdayRow = 6;
@@ -650,9 +695,46 @@ async function fetchMonthEntries(year: number, month: number): Promise<RawEntry[
   return (data ?? []) as RawEntry[];
 }
 
-export async function buildMonthlyTimesheetWorkbook(year: number, month: number): Promise<ExcelJS.Workbook> {
+/**
+ * `options.clientNames`, when given one or more client names (as they
+ * appear in `projects.client_name`), switches from the default consolidated
+ * single sheet (all projects together) to a client-wise export: one
+ * worksheet per selected client, each scoped to only that client's
+ * projects/hours, all inside the same workbook/file.
+ */
+export async function buildMonthlyTimesheetWorkbook(
+  year: number,
+  month: number,
+  options: { clientNames?: string[] } = {}
+): Promise<ExcelJS.Workbook> {
   const [projects, users, entries] = await Promise.all([getAllProjects(), getAllUsers(), fetchMonthEntries(year, month)]);
-  const projectMap = toProjectMap(projects);
-  const aggregation = aggregateMonthlyTimesheet(year, month, entries, projectMap);
-  return renderMonthlyTimesheetWorkbook(aggregation, projects, users);
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Ecomatrix Timesheets";
+  workbook.created = new Date();
+
+  const clientNames = [...new Set((options.clientNames ?? []).map((c) => c.trim()).filter(Boolean))];
+
+  if (clientNames.length === 0) {
+    const projectMap = toProjectMap(projects);
+    const aggregation = aggregateMonthlyTimesheet(year, month, entries, projectMap);
+    renderMonthlyTimesheetWorkbook(aggregation, projects, users, { workbook });
+    return workbook;
+  }
+
+  const usedSheetNames = new Set<string>();
+  for (const clientName of clientNames) {
+    const clientProjects = projects.filter((p) => p.client_name === clientName);
+    const clientProjectIds = new Set(clientProjects.map((p) => p.id));
+    const clientEntries = entries.filter((e) => e.project_id && clientProjectIds.has(e.project_id));
+    const projectMap = toProjectMap(clientProjects);
+    const aggregation = aggregateMonthlyTimesheet(year, month, clientEntries, projectMap);
+    const sheetName = uniqueSheetName(usedSheetNames, clientName);
+    renderMonthlyTimesheetWorkbook(aggregation, clientProjects, users, {
+      workbook,
+      sheetName,
+      clientLabel: clientName,
+    });
+  }
+  return workbook;
 }

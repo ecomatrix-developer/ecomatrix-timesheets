@@ -25,13 +25,17 @@ export default async function ExportTimesheetPage({
   const monthFirstDate = dateInfo[0].date;
   const monthLastDate = dateInfo[dateInfo.length - 1].date;
 
-  const { data: entries, error } = await supabaseAdmin
-    .from("timesheet_entries")
-    .select("employee_id, project_id, hours")
-    .gte("entry_date", monthFirstDate)
-    .lte("entry_date", monthLastDate)
-    .not("project_id", "is", null);
+  const [{ data: entries, error }, { data: projectRows, error: projectsError }] = await Promise.all([
+    supabaseAdmin
+      .from("timesheet_entries")
+      .select("employee_id, project_id, hours")
+      .gte("entry_date", monthFirstDate)
+      .lte("entry_date", monthLastDate)
+      .not("project_id", "is", null),
+    supabaseAdmin.from("projects").select("client_name"),
+  ]);
   if (error) throw error;
+  if (projectsError) throw projectsError;
 
   const employeeIds = new Set<string>();
   const projectIds = new Set<string>();
@@ -42,6 +46,10 @@ export default async function ExportTimesheetPage({
     totalHours += Number(e.hours ?? 0);
   }
 
+  const clients = [...new Set((projectRows ?? []).map((p) => p.client_name?.trim()).filter((c): c is string => !!c))].sort(
+    (a, b) => a.localeCompare(b)
+  );
+
   return (
     <PageTransition>
       <ExportTimesheetClient
@@ -50,6 +58,7 @@ export default async function ExportTimesheetPage({
         employeeCount={employeeIds.size}
         projectCount={projectIds.size}
         totalHours={totalHours}
+        clients={clients}
       />
     </PageTransition>
   );

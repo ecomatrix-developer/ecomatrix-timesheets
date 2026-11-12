@@ -12,9 +12,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
-  const [projects, users] = await Promise.all([getAllProjects(), getAllUsers()]);
-  const projectMap = toProjectMap(projects);
-  const userMap = toUserMap(users);
   const dateRange = resolveDateRange({
     dateFrom: request.nextUrl.searchParams.get("dateFrom") ?? undefined,
     dateTo: request.nextUrl.searchParams.get("dateTo") ?? undefined,
@@ -33,7 +30,10 @@ export async function GET(request: NextRequest) {
     query = query.eq("employee_id", session.userId);
   }
 
-  const { data, error } = await query;
+  // Independent of each other — fetch together instead of one after another.
+  const [projects, users, { data, error }] = await Promise.all([getAllProjects(), getAllUsers(), query]);
+  const projectMap = toProjectMap(projects);
+  const userMap = toUserMap(users);
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

@@ -31,15 +31,17 @@ export default async function DeleteOldEntriesPage() {
   // months (e.g. planning ahead) — anchoring this loop at today would
   // silently skip every month after today even though it has real data.
   // Capped at 36 months to keep this bounded.
-  const monthCounts: { monthYear: string; count: number }[] = [];
+  let monthCounts: { monthYear: string; count: number }[] = [];
   if (earliestDate && latestDate) {
     const [earliestY, earliestM] = earliestDate.split("-").map(Number);
     const [latestY, latestM] = latestDate.split("-").map(Number);
     const totalMonths = (latestY - earliestY) * 12 + (latestM - earliestM) + 1;
     const monthsToShow = Math.min(36, totalMonths);
     // Walk backward from the latest month so the most recent (including
-    // future-dated) months are checked first, same ordering as before.
-    for (let i = 0; i < monthsToShow; i++) {
+    // future-dated) months are checked first, same ordering as before —
+    // but issue all the count queries at once instead of one after another
+    // (was up to 36 sequential round trips, now one parallel batch).
+    const monthDefs = Array.from({ length: monthsToShow }, (_, i) => {
       const d = new Date(latestY, latestM - 1 - i, 1);
       const y = d.getFullYear();
       const m = d.getMonth() + 1;
@@ -47,15 +49,20 @@ export default async function DeleteOldEntriesPage() {
       const startDate = `${y}-${monthStr}-01`;
       const lastDay = new Date(y, m, 0).getDate();
       const endDate = `${y}-${monthStr}-${String(lastDay).padStart(2, "0")}`;
-      const { count } = await supabaseAdmin
-        .from("timesheet_entries")
-        .select("*", { count: "exact", head: true })
-        .gte("entry_date", startDate)
-        .lte("entry_date", endDate);
-      if (count && count > 0) {
-        monthCounts.push({ monthYear: `${y}-${monthStr}`, count });
-      }
-    }
+      return { monthYear: `${y}-${monthStr}`, startDate, endDate };
+    });
+    const counts = await Promise.all(
+      monthDefs.map(({ startDate, endDate }) =>
+        supabaseAdmin
+          .from("timesheet_entries")
+          .select("*", { count: "exact", head: true })
+          .gte("entry_date", startDate)
+          .lte("entry_date", endDate)
+      )
+    );
+    monthCounts = monthDefs
+      .map(({ monthYear }, i) => ({ monthYear, count: counts[i].count ?? 0 }))
+      .filter((m) => m.count > 0);
   }
 
   return (

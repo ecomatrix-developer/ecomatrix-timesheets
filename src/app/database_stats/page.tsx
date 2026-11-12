@@ -59,16 +59,33 @@ export default async function DatabaseStatsPage({
   const usersPage = Math.max(1, parseInt(resolvedSearchParams.usersPage ?? "1", 10) || 1);
   const projectsPage = Math.max(1, parseInt(resolvedSearchParams.projectsPage ?? "1", 10) || 1);
 
-  const [users, projects, entries, submittedDays, submittedWeeks] = await Promise.all([
+  const usersFrom = (usersPage - 1) * PAGE_SIZE;
+  const usersTo = usersFrom + PAGE_SIZE - 1;
+  const projectsFrom = (projectsPage - 1) * PAGE_SIZE;
+  const projectsTo = projectsFrom + PAGE_SIZE - 1;
+
+  // None of these queries depend on each other's results — they used to run
+  // in four separate sequential stages (whole-table counts, then period
+  // counts, then the size RPC, then paged users, then paged projects, then
+  // one count per date bucket); now they all fire at once.
+  const [
+    users,
+    projects,
+    entries,
+    submittedDays,
+    submittedWeeks,
+    periodEntries,
+    periodSubmittedDays,
+    sizeRpc,
+    usersPageRes,
+    projectsPageRes,
+    rangeStats,
+  ] = await Promise.all([
     countRows("users"),
     countRows("projects"),
     countRows("timesheet_entries"),
     countRows("submitted_days"),
     countRows("submitted_weeks"),
-  ]);
-  const totalRows = users + projects + entries + submittedDays + submittedWeeks;
-
-  const [periodEntries, periodSubmittedDays] = await Promise.all([
     supabaseAdmin
       .from("timesheet_entries")
       .select("id", { count: "exact", head: true })
@@ -79,15 +96,34 @@ export default async function DatabaseStatsPage({
       .select("id", { count: "exact", head: true })
       .gte("entry_date", dateRange.from)
       .lte("entry_date", dateRange.to),
+    // Real on-disk size via the get_database_size_stats() RPC (see
+    // supabase_patch_3_database_size_rpc.sql). Falls back gracefully to
+    // row-count-only display if the function hasn't been created yet.
+    supabaseAdmin.rpc("get_database_size_stats"),
+    supabaseAdmin
+      .from("users")
+      .select("id, mongo_id, username, name, role, created_at, updated_at", { count: "exact" })
+      .order("username")
+      .range(usersFrom, usersTo),
+    supabaseAdmin.from("projects").select("*", { count: "exact" }).order("name").range(projectsFrom, projectsTo),
+    Promise.all(
+      getDateBuckets(dateRange.from, dateRange.to).map(async (bucket) => {
+        const { count, error } = await supabaseAdmin
+          .from("timesheet_entries")
+          .select("id", { count: "exact", head: true })
+          .gte("entry_date", bucket.from)
+          .lte("entry_date", bucket.to);
+        if (error) throw error;
+        return { label: bucket.label, count: count ?? 0 };
+      })
+    ),
   ]);
+  const totalRows = users + projects + entries + submittedDays + submittedWeeks;
+
   if (periodEntries.error) throw periodEntries.error;
   if (periodSubmittedDays.error) throw periodSubmittedDays.error;
 
-  // Real on-disk size via the get_database_size_stats() RPC (see
-  // supabase_patch_3_database_size_rpc.sql). Falls back gracefully to
-  // row-count-only display if the function hasn't been created yet.
-  const { data: sizeRows, error: sizeErr } = await supabaseAdmin.rpc("get_database_size_stats");
-  const sizeStats: TableSizeRow[] | null = sizeErr ? null : (sizeRows as TableSizeRow[]);
+  const sizeStats: TableSizeRow[] | null = sizeRpc.error ? null : (sizeRpc.data as TableSizeRow[]);
   const totalSizeBytes = sizeStats?.[0]?.total_size_bytes ?? null;
   const tableSizes = sizeStats
     ? [...sizeStats]
@@ -95,33 +131,11 @@ export default async function DatabaseStatsPage({
         .sort((a, b) => b.table_size_bytes - a.table_size_bytes)
     : [];
 
-  const usersFrom = (usersPage - 1) * PAGE_SIZE;
-  const usersTo = usersFrom + PAGE_SIZE - 1;
-  const { data: pagedUsers, count: usersCount, error: usersErr } = await supabaseAdmin
-    .from("users")
-    .select("id, mongo_id, username, name, role, created_at, updated_at", { count: "exact" })
-    .order("username")
-    .range(usersFrom, usersTo);
+  const { data: pagedUsers, count: usersCount, error: usersErr } = usersPageRes;
   if (usersErr) throw usersErr;
 
-  const projectsFrom = (projectsPage - 1) * PAGE_SIZE;
-  const projectsTo = projectsFrom + PAGE_SIZE - 1;
-  const { data: pagedProjects, count: projectsCount, error: projectsErr } = await supabaseAdmin
-    .from("projects")
-    .select("*", { count: "exact" })
-    .order("name")
-    .range(projectsFrom, projectsTo);
+  const { data: pagedProjects, count: projectsCount, error: projectsErr } = projectsPageRes;
   if (projectsErr) throw projectsErr;
-
-  const rangeStats = await Promise.all(getDateBuckets(dateRange.from, dateRange.to).map(async (bucket) => {
-    const { count, error } = await supabaseAdmin
-      .from("timesheet_entries")
-      .select("id", { count: "exact", head: true })
-      .gte("entry_date", bucket.from)
-      .lte("entry_date", bucket.to);
-    if (error) throw error;
-    return { label: bucket.label, count: count ?? 0 };
-  }));
 
   return (
     <PageTransition>

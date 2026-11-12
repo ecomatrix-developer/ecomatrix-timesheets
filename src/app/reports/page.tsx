@@ -79,6 +79,9 @@ export default async function ReportsPage({
   let allProjectTotalsLength = 0;
   const projectTotalsById: Record<string, number> = {};
 
+  // Detailed grid + PTO/overtime summary for selected employee
+  let gridData = null;
+
   if (selectedEmployee) {
     // Submission log for the selected employee — paginated server-side so
     // only PAGE_SIZE rows are ever fetched for the page shown.
@@ -91,8 +94,48 @@ export default async function ReportsPage({
         .lte("entry_date", monthLastDate);
     }
 
-    const { count: submissionsCount, error: subCountErr } = await submissionsBaseQuery();
+    const dateInfo = dateInfoForMonth;
+    const yearStart = `${year}-01-01`;
+    const yearEnd = `${year}-12-31`;
+
+    // These four don't depend on each other — issue them together instead
+    // of one after another. Note: `allEntries`/`entries` used to be two
+    // separate queries for the exact same table/employee/date-range (just
+    // different column lists) — now fetched once and reused for both the
+    // project-totals aggregation below and the grid data further down.
+    const [
+      { count: submissionsCount, error: subCountErr },
+      { data: monthEntries, error: entriesErr },
+      { data: submittedDays, error: sdErr },
+      { data: yearEntries, error: yearErr },
+    ] = await Promise.all([
+      submissionsBaseQuery(),
+      supabaseAdmin
+        .from("timesheet_entries")
+        .select("*")
+        .eq("employee_id", selectedEmployee.id)
+        .gte("entry_date", monthFirstDate)
+        .lte("entry_date", monthLastDate),
+      supabaseAdmin
+        .from("submitted_days")
+        .select("entry_date, total_hours")
+        .eq("employee_id", selectedEmployee.id)
+        .gte("entry_date", monthFirstDate)
+        .lte("entry_date", monthLastDate),
+      supabaseAdmin
+        .from("timesheet_entries")
+        .select("category, hours")
+        .eq("employee_id", selectedEmployee.id)
+        .gte("entry_date", yearStart)
+        .lte("entry_date", yearEnd)
+        .in("category", ["Special Vacation", "Special Vacation Banking"]),
+    ]);
     if (subCountErr) throw subCountErr;
+    if (entriesErr) throw entriesErr;
+    if (sdErr) throw sdErr;
+    if (yearErr) throw yearErr;
+    const allEntries = monthEntries as TimesheetEntry[] | null;
+
     submissionsTotal = submissionsCount ?? 0;
     submissionsTotalPages = Math.max(1, Math.ceil(submissionsTotal / PAGE_SIZE));
     safeSubmissionsPage = Math.min(submissionsPage, submissionsTotalPages);
@@ -119,14 +162,6 @@ export default async function ReportsPage({
     // compute the per-project sums in memory (Supabase's JS client has no
     // GROUP BY), but the RENDERED list below is paginated server-side so
     // the browser never has to mount more than PAGE_SIZE rows either.
-    const { data: allEntries, error: allEntriesErr } = await supabaseAdmin
-      .from("timesheet_entries")
-      .select("project_id, category, hours, employee_id")
-      .eq("employee_id", selectedEmployee.id)
-      .gte("entry_date", monthFirstDate)
-      .lte("entry_date", monthLastDate);
-    if (allEntriesErr) throw allEntriesErr;
-
     const allProjectTotals: { label: string; hours: number }[] = [];
     const totalsMap = new Map<string, number>();
     for (const e of allEntries ?? []) {
@@ -155,6 +190,59 @@ export default async function ReportsPage({
       if (!e.project_id) continue;
       projectTotalsById[e.project_id] = (projectTotalsById[e.project_id] ?? 0) + Number(e.hours ?? 0);
     }
+
+    // Detailed grid + PTO/overtime summary — reuses the same `allEntries`
+    // fetched above instead of re-querying the identical table/employee/
+    // date-range a second time just for a different column list.
+    const entriesByDate: Record<string, Record<string, GridEntryValue>> = {};
+    const projectIdsWithEntries = new Set<string>();
+    const byCategoryTotals: Record<string, number> = {};
+
+    for (const e of allEntries ?? []) {
+      const rowKey = e.project_id ? `p:${e.project_id}` : `c:${e.category}`;
+      entriesByDate[e.entry_date] ??= {};
+      entriesByDate[e.entry_date][rowKey] = {
+        hours: Number(e.hours ?? 0),
+        comment: e.comment ?? "",
+      };
+      if (e.project_id) projectIdsWithEntries.add(e.project_id);
+      if (e.category) byCategoryTotals[e.category] = (byCategoryTotals[e.category] ?? 0) + Number(e.hours ?? 0);
+    }
+
+    const ptoSummary = computePtoTotal(byCategoryTotals);
+    // Mirrors v1's /reports vacation_summary: month-scoped, same range as
+    // PTO above (NOT the year-wide figure — that's special vacation only).
+    const vacationSummary = byCategoryTotals["Vacation"] ?? 0;
+
+    let overtimeSummary = 0;
+    for (const d of dateInfo) {
+      const dayTotal = Object.values(entriesByDate[d.date] ?? {}).reduce((s, v) => s + v.hours, 0);
+      overtimeSummary += computeDailyOvertime(d.date, dayTotal);
+    }
+
+    const submittedMap = new Map((submittedDays ?? []).map((s) => [s.entry_date, Number(s.total_hours)]));
+    const monthlyTotal = [...submittedMap.values()].reduce((a, b) => a + b, 0);
+
+    let specialVacationYear = 0;
+    let specialVacationBankedYear = 0;
+    for (const e of yearEntries ?? []) {
+      const hours = Number(e.hours ?? 0);
+      if (e.category === "Special Vacation") specialVacationYear += hours;
+      else if (e.category === "Special Vacation Banking") specialVacationBankedYear += hours;
+    }
+
+    gridData = {
+      dateInfo,
+      entriesByDate,
+      submittedDates: [...submittedMap.keys()],
+      monthlyTotal,
+      ptoSummary,
+      vacationSummary,
+      specialVacationYear,
+      specialVacationBankedYear,
+      overtimeSummary,
+      projectsWithEntries: projects.filter((p: Project) => projectIdsWithEntries.has(p.id)),
+    };
   }
 
   // Mirrors v1's "Project Summary" accordion exactly: v1's equivalent list
@@ -180,92 +268,6 @@ export default async function ReportsPage({
   const paginatedProjects = [...psFilteredProjects]
     .sort((a, b) => a.name.localeCompare(b.name))
     .slice(psFrom, psFrom + PAGE_SIZE);
-
-  // Detailed grid + PTO/overtime summary for selected employee
-  let gridData = null;
-  if (selectedEmployee) {
-    const dateInfo = dateInfoForMonth;
-    const firstDate = dateInfo[0].date;
-    const lastDate = dateInfo[dateInfo.length - 1].date;
-
-    const { data: entries, error: entErr } = await supabaseAdmin
-      .from("timesheet_entries")
-      .select("*")
-      .eq("employee_id", selectedEmployee.id)
-      .gte("entry_date", firstDate)
-      .lte("entry_date", lastDate);
-    if (entErr) throw entErr;
-
-    const { data: submittedDays, error: sdErr } = await supabaseAdmin
-      .from("submitted_days")
-      .select("entry_date, total_hours")
-      .eq("employee_id", selectedEmployee.id)
-      .gte("entry_date", firstDate)
-      .lte("entry_date", lastDate);
-    if (sdErr) throw sdErr;
-
-    const entriesByDate: Record<string, Record<string, GridEntryValue>> = {};
-    const projectIdsWithEntries = new Set<string>();
-    const byCategoryTotals: Record<string, number> = {};
-
-    for (const e of (entries ?? []) as TimesheetEntry[]) {
-      const rowKey = e.project_id ? `p:${e.project_id}` : `c:${e.category}`;
-      entriesByDate[e.entry_date] ??= {};
-      entriesByDate[e.entry_date][rowKey] = {
-        hours: Number(e.hours ?? 0),
-        comment: e.comment ?? "",
-      };
-      if (e.project_id) projectIdsWithEntries.add(e.project_id);
-      if (e.category) byCategoryTotals[e.category] = (byCategoryTotals[e.category] ?? 0) + Number(e.hours ?? 0);
-    }
-
-    const ptoSummary = computePtoTotal(byCategoryTotals);
-    // Mirrors v1's /reports vacation_summary: month-scoped, same range as
-    // PTO above (NOT the year-wide figure — that's special vacation only).
-    const vacationSummary = byCategoryTotals["Vacation"] ?? 0;
-
-    let overtimeSummary = 0;
-    for (const d of dateInfo) {
-      const dayTotal = Object.values(entriesByDate[d.date] ?? {}).reduce((s, v) => s + v.hours, 0);
-      overtimeSummary += computeDailyOvertime(d.date, dayTotal);
-    }
-
-    const submittedMap = new Map((submittedDays ?? []).map((s) => [s.entry_date, Number(s.total_hours)]));
-    const monthlyTotal = [...submittedMap.values()].reduce((a, b) => a + b, 0);
-
-    // Special vacation totals are year-to-date, matching the original report behavior.
-    const yearStart = `${year}-01-01`;
-    const yearEnd = `${year}-12-31`;
-    const { data: yearEntries, error: yearErr } = await supabaseAdmin
-      .from("timesheet_entries")
-      .select("category, hours")
-      .eq("employee_id", selectedEmployee.id)
-      .gte("entry_date", yearStart)
-      .lte("entry_date", yearEnd)
-      .in("category", ["Special Vacation", "Special Vacation Banking"]);
-    if (yearErr) throw yearErr;
-
-    let specialVacationYear = 0;
-    let specialVacationBankedYear = 0;
-    for (const e of yearEntries ?? []) {
-      const hours = Number(e.hours ?? 0);
-      if (e.category === "Special Vacation") specialVacationYear += hours;
-      else if (e.category === "Special Vacation Banking") specialVacationBankedYear += hours;
-    }
-
-    gridData = {
-      dateInfo,
-      entriesByDate,
-      submittedDates: [...submittedMap.keys()],
-      monthlyTotal,
-      ptoSummary,
-      vacationSummary,
-      specialVacationYear,
-      specialVacationBankedYear,
-      overtimeSummary,
-      projectsWithEntries: projects.filter((p: Project) => projectIdsWithEntries.has(p.id)),
-    };
-  }
 
   return (
     <PageTransition>

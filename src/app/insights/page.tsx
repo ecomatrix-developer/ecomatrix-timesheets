@@ -40,16 +40,20 @@ export default async function InsightsPage({
   const employeeFilter = resolvedSearchParams.employee_filter ?? "all";
   const projectFilter = resolvedSearchParams.project_filter ?? "all";
 
-  const [projects, users] = await Promise.all([getAllProjects(), getAllUsers()]);
+  const [projects, users, entriesRes] = await Promise.all([
+    getAllProjects(),
+    getAllUsers(),
+    supabaseAdmin
+      .from("timesheet_entries")
+      .select("project_id, category, employee_id, hours, comment, entry_date")
+      .gte("entry_date", dateRange.from)
+      .lte("entry_date", dateRange.to),
+  ]);
   const projectMap = toProjectMap(projects);
   const userById = new Map(users.map((u) => [u.id, u]));
   const employees = users.filter((u) => u.role === "employee");
 
-  const { data: entries, error } = await supabaseAdmin
-    .from("timesheet_entries")
-    .select("project_id, category, employee_id, hours, comment, entry_date")
-    .gte("entry_date", dateRange.from)
-    .lte("entry_date", dateRange.to);
+  const { data: entries, error } = entriesRes;
   if (error) throw error;
 
   const hoursByProject = new Map<string, number>();

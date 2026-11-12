@@ -23,20 +23,21 @@ import { FaPlus, FaUserPlus, FaDatabase } from "react-icons/fa";
  * request (page is already force-dynamic).
  */
 async function buildEmployeeOverviewData(userId: string, from: string, to: string) {
-  const { data: periodEntries, error: periodErr } = await supabaseAdmin
-    .from("timesheet_entries")
-    .select("entry_date, hours, project_id, category")
-    .eq("employee_id", userId)
-    .gte("entry_date", from)
-    .lte("entry_date", to);
+  const [{ data: periodEntries, error: periodErr }, { data: periodSubmitted, error: submittedErr }] = await Promise.all([
+    supabaseAdmin
+      .from("timesheet_entries")
+      .select("entry_date, hours, project_id, category")
+      .eq("employee_id", userId)
+      .gte("entry_date", from)
+      .lte("entry_date", to),
+    supabaseAdmin
+      .from("submitted_days")
+      .select("entry_date")
+      .eq("employee_id", userId)
+      .gte("entry_date", from)
+      .lte("entry_date", to),
+  ]);
   if (periodErr) throw periodErr;
-
-  const { data: periodSubmitted, error: submittedErr } = await supabaseAdmin
-    .from("submitted_days")
-    .select("entry_date")
-    .eq("employee_id", userId)
-    .gte("entry_date", from)
-    .lte("entry_date", to);
   if (submittedErr) throw submittedErr;
 
   // Daily totals -> capped regular/overtime split, same rule as /timesheet.
@@ -108,18 +109,28 @@ async function buildEmployeeOverviewData(userId: string, from: string, to: strin
  * existing project stat tiles/table above, which every role can see.
  */
 async function buildDashboardOverviewData(from: string, to: string) {
-  const users = await getAllUsers();
+  // Period billable/non-billable trend, daily for short ranges and weekly for longer ranges.
+  const dateBuckets = getDateBuckets(from, to);
+  const weekdayDates = getDateInfoBetween(from, to)
+    .filter((date) => date.weekday < 5)
+    .map((date) => date.date);
+
+  // None of these four queries depend on each other — fetch them all at
+  // once instead of one-after-another (was 4 sequential round trips).
+  const [users, entriesRes, submittedRes, projectsRes] = await Promise.all([
+    getAllUsers(),
+    supabaseAdmin
+      .from("timesheet_entries")
+      .select("entry_date, hours, project_id, employee_id")
+      .gte("entry_date", from)
+      .lte("entry_date", to),
+    supabaseAdmin.from("submitted_days").select("employee_id, entry_date").gte("entry_date", from).lte("entry_date", to),
+    supabaseAdmin.from("projects").select("id, name, status, project_type"),
+  ]);
   const employees = users.filter((u) => u.role === "employee");
   const userById = new Map(users.map((u) => [u.id, u]));
 
-  // Period billable/non-billable trend, daily for short ranges and weekly for longer ranges.
-  const dateBuckets = getDateBuckets(from, to);
-
-  const { data: entries, error: entriesErr } = await supabaseAdmin
-    .from("timesheet_entries")
-    .select("entry_date, hours, project_id, employee_id")
-    .gte("entry_date", from)
-    .lte("entry_date", to);
+  const { data: entries, error: entriesErr } = entriesRes;
   if (entriesErr) throw entriesErr;
 
   const monthlyHours = dateBuckets.map((bucket) => {
@@ -161,14 +172,7 @@ async function buildDashboardOverviewData(from: string, to: string) {
     .sort((a, b) => b.hours - a.hours)
     .slice(0, 8);
 
-  const weekdayDates = getDateInfoBetween(from, to)
-    .filter((date) => date.weekday < 5)
-    .map((date) => date.date);
-  const { data: submittedDocs, error: subErr } = await supabaseAdmin
-    .from("submitted_days")
-    .select("employee_id, entry_date")
-    .gte("entry_date", from)
-    .lte("entry_date", to);
+  const { data: submittedDocs, error: subErr } = submittedRes;
   if (subErr) throw subErr;
 
   const submittedByEmployee = new Map<string, Set<string>>();
@@ -185,7 +189,7 @@ async function buildDashboardOverviewData(from: string, to: string) {
     .sort((a, b) => Number(a.compliant) - Number(b.compliant));
 
   // Top 5 projects by hours in the selected range.
-  const { data: allProjects, error: projErr } = await supabaseAdmin.from("projects").select("id, name, status, project_type");
+  const { data: allProjects, error: projErr } = projectsRes;
   if (projErr) throw projErr;
   const projectMap = new Map((allProjects ?? []).map((p) => [p.id, p]));
 
@@ -239,39 +243,6 @@ export default async function DashboardPage({
   const searchTerm = (resolvedSearchParams.search_term ?? "").trim();
   const page = Math.max(1, parseInt(resolvedSearchParams.page ?? "1", 10) || 1);
 
-  // Status counts are computed from a lightweight count-only query per
-  // status (not the paginated page's rows) so the stat cards always
-  // reflect the whole table, independent of which page is being viewed.
-  const counts = {
-    active: 0,
-    completed: 0,
-    "re-work": 0,
-    archived: 0,
-  };
-  const [
-    { count: activeCount, error: activeErr },
-    { count: completedCount, error: completedErr },
-    { count: reworkCount, error: reworkErr },
-    { count: archivedCount, error: archivedErr },
-    { count: totalCount, error: totalErr },
-  ] = await Promise.all([
-    supabaseAdmin.from("projects").select("*", { count: "exact", head: true }).eq("status", "active"),
-    supabaseAdmin.from("projects").select("*", { count: "exact", head: true }).eq("status", "completed"),
-    supabaseAdmin.from("projects").select("*", { count: "exact", head: true }).eq("status", "re-work"),
-    supabaseAdmin.from("projects").select("*", { count: "exact", head: true }).eq("status", "archived"),
-    supabaseAdmin.from("projects").select("*", { count: "exact", head: true }),
-  ]);
-  const statCountErr = activeErr || completedErr || reworkErr || archivedErr || totalErr;
-  if (statCountErr) {
-    console.error("[dashboard] status count queries failed:", statCountErr);
-    throw new Error(`Dashboard status count query failed: ${statCountErr.message}`);
-  }
-  counts.active = activeCount ?? 0;
-  counts.completed = completedCount ?? 0;
-  counts["re-work"] = reworkCount ?? 0;
-  counts.archived = archivedCount ?? 0;
-  const totalProjects = totalCount ?? 0;
-
   function applyFilters(query: ReturnType<typeof supabaseAdmin.from>) {
     let q = query.select("*", { count: "exact" });
     if (selectedStatuses.length > 0) {
@@ -287,13 +258,54 @@ export default async function DashboardPage({
     return q;
   }
 
-  const { count: filteredCount, error: countErr } = await applyFilters(
-    supabaseAdmin.from("projects")
-  ).order("name");
+  // Everything below is independent (status counts, the filtered count, and
+  // the admin/employee overview widgets all read different data) — kick
+  // them all off together instead of waiting on each one before starting
+  // the next. Only `pageProjects` has a real dependency (it needs
+  // `filteredCount` to clamp the requested page), so it's awaited after.
+  const [
+    [
+      { count: activeCount, error: activeErr },
+      { count: completedCount, error: completedErr },
+      { count: reworkCount, error: reworkErr },
+      { count: archivedCount, error: archivedErr },
+      { count: totalCount, error: totalErr },
+      { count: filteredCount, error: countErr },
+    ],
+    overviewData,
+    employeeOverviewData,
+  ] = await Promise.all([
+    Promise.all([
+      supabaseAdmin.from("projects").select("*", { count: "exact", head: true }).eq("status", "active"),
+      supabaseAdmin.from("projects").select("*", { count: "exact", head: true }).eq("status", "completed"),
+      supabaseAdmin.from("projects").select("*", { count: "exact", head: true }).eq("status", "re-work"),
+      supabaseAdmin.from("projects").select("*", { count: "exact", head: true }).eq("status", "archived"),
+      supabaseAdmin.from("projects").select("*", { count: "exact", head: true }),
+      applyFilters(supabaseAdmin.from("projects")).order("name"),
+    ]),
+    session.role === "admin" ? buildDashboardOverviewData(dateRange.from, dateRange.to) : Promise.resolve(null),
+    session.role === "employee" ? buildEmployeeOverviewData(session.userId, dateRange.from, dateRange.to) : Promise.resolve(null),
+  ]);
+
+  // Status counts are computed from a lightweight count-only query per
+  // status (not the paginated page's rows) so the stat cards always
+  // reflect the whole table, independent of which page is being viewed.
+  const statCountErr = activeErr || completedErr || reworkErr || archivedErr || totalErr;
+  if (statCountErr) {
+    console.error("[dashboard] status count queries failed:", statCountErr);
+    throw new Error(`Dashboard status count query failed: ${statCountErr.message}`);
+  }
   if (countErr) {
     console.error("[dashboard] filtered count query failed:", countErr);
     throw new Error(`Dashboard count query failed: ${countErr.message}`);
   }
+  const counts = {
+    active: activeCount ?? 0,
+    completed: completedCount ?? 0,
+    "re-work": reworkCount ?? 0,
+    archived: archivedCount ?? 0,
+  };
+  const totalProjects = totalCount ?? 0;
 
   const totalFilteredProjects = filteredCount ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalFilteredProjects / PAGE_SIZE));
@@ -308,13 +320,6 @@ export default async function DashboardPage({
     console.error("[dashboard] page query failed:", pageErr);
     throw new Error(`Dashboard page query failed: ${pageErr.message}`);
   }
-
-  const overviewData = session.role === "admin"
-    ? await buildDashboardOverviewData(dateRange.from, dateRange.to)
-    : null;
-  const employeeOverviewData = session.role === "employee"
-    ? await buildEmployeeOverviewData(session.userId, dateRange.from, dateRange.to)
-    : null;
 
   return (
     <PageTransition>

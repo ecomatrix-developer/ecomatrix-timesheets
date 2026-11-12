@@ -38,26 +38,47 @@ export default async function TimesheetPage({
     return dt.toISOString().slice(0, 10);
   })();
 
-  const [{ data: allProjects, error: projErr }, { data: entries, error: entErr }, { data: submitted, error: subErr }] =
-    await Promise.all([
-      supabaseAdmin.from("projects").select("*").order("name"),
-      supabaseAdmin
-        .from("timesheet_entries")
-        .select("*")
-        .eq("employee_id", session.userId)
-        .gte("entry_date", firstDate)
-        .lte("entry_date", lastDate),
-      supabaseAdmin
-        .from("submitted_days")
-        .select("entry_date, total_hours")
-        .eq("employee_id", session.userId)
-        .gte("entry_date", lookbackStart)
-        .lte("entry_date", lastDate),
-    ]);
+  const yearStart = `${year}-01-01`;
+  const yearEnd = `${year}-12-31`;
+
+  const [
+    { data: allProjects, error: projErr },
+    { data: entries, error: entErr },
+    { data: submitted, error: subErr },
+    { data: yearEntries, error: yearErr },
+  ] = await Promise.all([
+    supabaseAdmin.from("projects").select("*").order("name"),
+    supabaseAdmin
+      .from("timesheet_entries")
+      .select("*")
+      .eq("employee_id", session.userId)
+      .gte("entry_date", firstDate)
+      .lte("entry_date", lastDate),
+    supabaseAdmin
+      .from("submitted_days")
+      .select("entry_date, total_hours")
+      .eq("employee_id", session.userId)
+      .gte("entry_date", lookbackStart)
+      .lte("entry_date", lastDate),
+    // Mirrors v1's /timesheet route exactly: "Special Vacation" and
+    // "Special Vacation Banking" on this page's metric card are a
+    // YEAR-TO-DATE total (Jan 1 - Dec 31 of the selected year), genuinely
+    // independent of the month-scoped queries above (PTO/Vacation are
+    // month-scoped, same as the grid itself) — fetched alongside them
+    // rather than after, since neither depends on the other.
+    supabaseAdmin
+      .from("timesheet_entries")
+      .select("category, hours")
+      .eq("employee_id", session.userId)
+      .gte("entry_date", yearStart)
+      .lte("entry_date", yearEnd)
+      .in("category", ["Special Vacation", "Special Vacation Banking"]),
+  ]);
 
   if (projErr) throw projErr;
   if (entErr) throw entErr;
   if (subErr) throw subErr;
+  if (yearErr) throw yearErr;
 
   // Build entries keyed by date -> rowKey -> {hours, comment}
   const entriesByDate: Record<string, Record<string, GridEntryValue>> = {};
@@ -71,23 +92,6 @@ export default async function TimesheetPage({
   }
 
   const submittedDates = new Set((submitted ?? []).map((s) => s.entry_date));
-
-  // Mirrors v1's /timesheet route exactly: "Special Vacation" and "Special
-  // Vacation Banking" on this page's metric card are a YEAR-TO-DATE total
-  // (Jan 1 – Dec 31 of the selected year), a genuinely separate query from
-  // every other metric on this page (PTO/Vacation are month-scoped, same
-  // as the grid itself). This must not be derived from the month's
-  // entriesByDate — that would silently understate it.
-  const yearStart = `${year}-01-01`;
-  const yearEnd = `${year}-12-31`;
-  const { data: yearEntries, error: yearErr } = await supabaseAdmin
-    .from("timesheet_entries")
-    .select("category, hours")
-    .eq("employee_id", session.userId)
-    .gte("entry_date", yearStart)
-    .lte("entry_date", yearEnd)
-    .in("category", ["Special Vacation", "Special Vacation Banking"]);
-  if (yearErr) throw yearErr;
 
   let specialVacationHoursYear = 0;
   let specialVacationBankedYear = 0;

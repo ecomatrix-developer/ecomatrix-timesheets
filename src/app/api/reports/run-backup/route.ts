@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { getAllUsers, getAllProjects, toProjectMap } from "@/lib/data";
-import { buildEmployeeWeeklyGrid, previousWeekRange } from "@/lib/reportData";
+import { buildGridFromEntries, previousWeekRange } from "@/lib/reportData";
 import { renderPdfInChildProcess } from "@/lib/pdf/renderInChildProcess";
 import { sendReportEmail } from "@/lib/mailer";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import type { TimesheetEntry } from "@/lib/types";
 
 /**
  * Mirrors v1's /run-backup-now, which generates AND EMAILS every employee's
@@ -17,17 +19,33 @@ export async function POST() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   }
 
-  const users = await getAllUsers();
-  const employees = users.filter((u) => u.role === "employee");
-  const projects = await getAllProjects();
-  const projectMap = toProjectMap(projects);
   const { dates } = previousWeekRange();
+  const [users, projects, { data: weekEntries, error: entriesErr }] = await Promise.all([
+    getAllUsers(),
+    getAllProjects(),
+    supabaseAdmin
+      .from("timesheet_entries")
+      .select("*")
+      .gte("entry_date", dates[0])
+      .lte("entry_date", dates[dates.length - 1]),
+  ]);
+  if (entriesErr) throw entriesErr;
+  const employees = users.filter((u) => u.role === "employee");
+  const projectMap = toProjectMap(projects);
   const adminEmail = process.env.ADMIN_EMAIL;
+
+  // One query for every employee's week instead of one query per employee.
+  const entriesByEmployee = new Map<string, TimesheetEntry[]>();
+  for (const e of (weekEntries ?? []) as TimesheetEntry[]) {
+    const list = entriesByEmployee.get(e.employee_id);
+    if (list) list.push(e);
+    else entriesByEmployee.set(e.employee_id, [e]);
+  }
 
   const results: { username: string; emailed: boolean; reason?: string }[] = [];
 
   for (const emp of employees) {
-    const grid = await buildEmployeeWeeklyGrid(emp, dates, projectMap);
+    const grid = buildGridFromEntries(emp, dates, projectMap, entriesByEmployee.get(emp.id) ?? []);
     // Rendered in a separate child process — @react-pdf/renderer is
     // incompatible with the React 19 canary Next.js's server runtime
     // substitutes in-process. See renderInChildProcess.ts for details.

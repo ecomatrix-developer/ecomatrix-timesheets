@@ -29,12 +29,14 @@ export default async function AdminTimesheetViewPage({
   const resolvedSearchParams = await searchParams;
   const username = decodeURIComponent(rawUsername);
 
-  const { data: employee, error: userErr } = await supabaseAdmin
-    .from("users")
-    .select("id, name, username")
-    .eq("username", username)
-    .maybeSingle();
+  // allProjects doesn't depend on which employee this is, so fetch it
+  // alongside the employee lookup instead of after.
+  const [{ data: employee, error: userErr }, { data: allProjects, error: projErr }] = await Promise.all([
+    supabaseAdmin.from("users").select("id, name, username").eq("username", username).maybeSingle(),
+    supabaseAdmin.from("projects").select("*").order("name"),
+  ]);
   if (userErr) throw userErr;
+  if (projErr) throw projErr;
   if (!employee) notFound();
 
   const { year: defYear, month: defMonth } = todayYearMonth();
@@ -45,23 +47,20 @@ export default async function AdminTimesheetViewPage({
   const firstDate = dateInfo[0].date;
   const lastDate = dateInfo[dateInfo.length - 1].date;
 
-  const [{ data: allProjects, error: projErr }, { data: entries, error: entErr }, { data: submitted, error: subErr }] =
-    await Promise.all([
-      supabaseAdmin.from("projects").select("*").order("name"),
-      supabaseAdmin
-        .from("timesheet_entries")
-        .select("*")
-        .eq("employee_id", employee.id)
-        .gte("entry_date", firstDate)
-        .lte("entry_date", lastDate),
-      supabaseAdmin
-        .from("submitted_days")
-        .select("entry_date, total_hours")
-        .eq("employee_id", employee.id)
-        .gte("entry_date", firstDate)
-        .lte("entry_date", lastDate),
-    ]);
-  if (projErr) throw projErr;
+  const [{ data: entries, error: entErr }, { data: submitted, error: subErr }] = await Promise.all([
+    supabaseAdmin
+      .from("timesheet_entries")
+      .select("*")
+      .eq("employee_id", employee.id)
+      .gte("entry_date", firstDate)
+      .lte("entry_date", lastDate),
+    supabaseAdmin
+      .from("submitted_days")
+      .select("entry_date, total_hours")
+      .eq("employee_id", employee.id)
+      .gte("entry_date", firstDate)
+      .lte("entry_date", lastDate),
+  ]);
   if (entErr) throw entErr;
   if (subErr) throw subErr;
 

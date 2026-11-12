@@ -19,22 +19,16 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
   const { id: projectId } = await params;
 
-  const { data: project, error: projectErr } = await supabaseAdmin
-    .from("projects")
-    .select("*")
-    .eq("id", projectId)
-    .maybeSingle();
+  // None of these three depend on each other's results — fetch together.
+  const [{ data: project, error: projectErr }, { data: entries, error: entriesErr }, users] = await Promise.all([
+    supabaseAdmin.from("projects").select("*").eq("id", projectId).maybeSingle(),
+    supabaseAdmin.from("timesheet_entries").select("*").eq("project_id", projectId).order("entry_date"),
+    getAllUsers(),
+  ]);
   if (projectErr) return NextResponse.json({ error: projectErr.message }, { status: 500 });
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
-
-  const { data: entries, error: entriesErr } = await supabaseAdmin
-    .from("timesheet_entries")
-    .select("*")
-    .eq("project_id", projectId)
-    .order("entry_date");
   if (entriesErr) return NextResponse.json({ error: entriesErr.message }, { status: 500 });
 
-  const users = await getAllUsers();
   const userById = new Map(users.map((u) => [u.id, u]));
 
   const totalHours = (entries ?? []).reduce((sum, e) => sum + Number(e.hours ?? 0), 0);

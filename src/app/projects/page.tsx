@@ -46,20 +46,42 @@ export default async function ProjectsPage({
   const searchTerm = (resolvedSearchParams.search_term ?? "").trim();
   const page = Math.max(1, parseInt(resolvedSearchParams.page ?? "1", 10) || 1);
 
-  const activeProjectIds = new Set<string>();
-  for (let offset = 0; ; offset += 1000) {
-    const { data: activeEntries, error: activityErr } = await supabaseAdmin
+  // Which projects have any entry in the selected date range — fetched in
+  // one parallel batch of 1000-row pages (sized from a head-count query)
+  // instead of a serial while-loop, which was issuing one DB round trip
+  // after another until it ran out of rows (the single biggest contributor
+  // to this page being slow on a table of any real size).
+  function activityQuery(range: [number, number]) {
+    return supabaseAdmin
       .from("timesheet_entries")
       .select("project_id")
       .not("project_id", "is", null)
       .gte("entry_date", dateRange.from)
       .lte("entry_date", dateRange.to)
-      .range(offset, offset + 999);
+      .range(range[0], range[1]);
+  }
+
+  const { count: activeEntryCount, error: activityCountErr } = await supabaseAdmin
+    .from("timesheet_entries")
+    .select("project_id", { count: "exact", head: true })
+    .not("project_id", "is", null)
+    .gte("entry_date", dateRange.from)
+    .lte("entry_date", dateRange.to);
+  if (activityCountErr) throw activityCountErr;
+
+  const CHUNK = 1000;
+  const chunkCount = Math.max(1, Math.ceil((activeEntryCount ?? 0) / CHUNK));
+  const activityChunks =
+    (activeEntryCount ?? 0) > 0
+      ? await Promise.all(Array.from({ length: chunkCount }, (_, i) => activityQuery([i * CHUNK, i * CHUNK + CHUNK - 1])))
+      : [];
+
+  const activeProjectIds = new Set<string>();
+  for (const { data: activeEntries, error: activityErr } of activityChunks) {
     if (activityErr) throw activityErr;
     for (const entry of activeEntries ?? []) {
       if (entry.project_id) activeProjectIds.add(entry.project_id);
     }
-    if (!activeEntries || activeEntries.length < 1000) break;
   }
 
   function applyFilters(query: ReturnType<typeof supabaseAdmin.from>) {

@@ -45,19 +45,17 @@ export function previousWeekRange(today: Date = new Date()): { start: Date; end:
   return { start: startOfLastWeek, end: endOfLastWeek, dates: weekDates(startOfLastWeek) };
 }
 
-export async function buildEmployeeWeeklyGrid(
+/** Pure grid-building step, split out so callers that already have the
+ * entries in hand (e.g. buildOwnerReportData, which fetches the whole
+ * week for every employee in one query) don't have to re-query per
+ * employee — see buildEmployeeWeeklyGrid below for the single-employee,
+ * DB-fetching version of this. */
+export function buildGridFromEntries(
   employee: PublicUser,
   dates: string[],
-  projectMap: Record<string, Project>
-): Promise<EmployeeWeeklyGrid> {
-  const { data: entries, error } = await supabaseAdmin
-    .from("timesheet_entries")
-    .select("*")
-    .eq("employee_id", employee.id)
-    .gte("entry_date", dates[0])
-    .lte("entry_date", dates[dates.length - 1]);
-  if (error) throw error;
-
+  projectMap: Record<string, Project>,
+  entries: TimesheetEntry[]
+): EmployeeWeeklyGrid {
   const byDateRow: Record<string, Record<string, number>> = {};
   const projectIdsUsed = new Set<string>();
   for (const e of (entries ?? []) as TimesheetEntry[]) {
@@ -107,6 +105,24 @@ export async function buildEmployeeWeeklyGrid(
   return { employee, dates, rows, dailyTotals, dailyRegular, dailyOvertime, weekTotal, weekOvertime };
 }
 
+/** Single-employee version — fetches that employee's entries itself.
+ * Used by the single-employee report routes (download-weekly, run-backup)
+ * where there's no already-fetched entry list to reuse. */
+export async function buildEmployeeWeeklyGrid(
+  employee: PublicUser,
+  dates: string[],
+  projectMap: Record<string, Project>
+): Promise<EmployeeWeeklyGrid> {
+  const { data: entries, error } = await supabaseAdmin
+    .from("timesheet_entries")
+    .select("*")
+    .eq("employee_id", employee.id)
+    .gte("entry_date", dates[0])
+    .lte("entry_date", dates[dates.length - 1]);
+  if (error) throw error;
+  return buildGridFromEntries(employee, dates, projectMap, (entries ?? []) as TimesheetEntry[]);
+}
+
 export interface OwnerReportData {
   start: Date;
   end: Date;
@@ -128,16 +144,27 @@ export interface OwnerReportData {
 
 export async function buildOwnerReportData(today: Date = new Date()): Promise<OwnerReportData> {
   const { start, end, dates } = previousWeekRange(today);
-  const projects = await getAllProjects();
+
+  // Independent fetches — projects/users/weeklyEntries/submittedDocs don't
+  // depend on each other, so issue them together instead of one at a time.
+  const [projects, users, entriesRes, submittedRes] = await Promise.all([
+    getAllProjects(),
+    getAllUsers(),
+    supabaseAdmin
+      .from("timesheet_entries")
+      .select("*")
+      .gte("entry_date", dates[0])
+      .lte("entry_date", dates[dates.length - 1]),
+    supabaseAdmin
+      .from("submitted_days")
+      .select("employee_id, entry_date")
+      .gte("entry_date", dates[0])
+      .lte("entry_date", dates[dates.length - 1]),
+  ]);
   const projectMap = toProjectMap(projects);
-  const users = await getAllUsers();
   const employees = users.filter((u) => u.role === "employee");
 
-  const { data: weeklyEntries, error } = await supabaseAdmin
-    .from("timesheet_entries")
-    .select("*")
-    .gte("entry_date", dates[0])
-    .lte("entry_date", dates[dates.length - 1]);
+  const { data: weeklyEntries, error } = entriesRes;
   if (error) throw error;
 
   let billableHours = 0;
@@ -204,11 +231,7 @@ export async function buildOwnerReportData(today: Date = new Date()): Promise<Ow
     .sort((a, b) => b.hours - a.hours);
 
   const weekdays = dates.slice(0, 5); // Mon..Fri
-  const { data: submittedDocs, error: subErr } = await supabaseAdmin
-    .from("submitted_days")
-    .select("employee_id, entry_date")
-    .gte("entry_date", dates[0])
-    .lte("entry_date", dates[dates.length - 1]);
+  const { data: submittedDocs, error: subErr } = submittedRes;
   if (subErr) throw subErr;
 
   const submittedByEmployee = new Map<string, Set<string>>();
@@ -238,10 +261,19 @@ export async function buildOwnerReportData(today: Date = new Date()): Promise<Ow
     if (totalEmpHours > 0 && totalEmpHours < 15) redFlags.push(`Low Logging: ${emp.name} logged only ${totalEmpHours.toFixed(1)} hours.`);
   }
 
-  const employeeGrids: EmployeeWeeklyGrid[] = [];
-  for (const emp of [...employees].sort((a, b) => a.name.localeCompare(b.name))) {
-    employeeGrids.push(await buildEmployeeWeeklyGrid(emp, dates, projectMap));
+  // `weeklyEntries` above already holds every employee's entries for the
+  // week — group them once in memory instead of re-querying per employee
+  // (buildEmployeeWeeklyGrid would otherwise issue one DB round trip per
+  // employee here, which is the whole point of having fetched weeklyEntries).
+  const entriesByEmployee = new Map<string, TimesheetEntry[]>();
+  for (const e of (weeklyEntries ?? []) as TimesheetEntry[]) {
+    const list = entriesByEmployee.get(e.employee_id);
+    if (list) list.push(e);
+    else entriesByEmployee.set(e.employee_id, [e]);
   }
+  const employeeGrids: EmployeeWeeklyGrid[] = [...employees]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((emp) => buildGridFromEntries(emp, dates, projectMap, entriesByEmployee.get(emp.id) ?? []));
 
   return {
     start,

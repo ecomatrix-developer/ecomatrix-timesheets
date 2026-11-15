@@ -8,6 +8,7 @@ import { motion } from "framer-motion";
 import {
   FaChevronLeft,
   FaChevronRight,
+  FaChevronDown,
   FaCalendarDay,
   FaCheck,
   FaTrash,
@@ -15,10 +16,11 @@ import {
   FaUmbrella,
   FaPlane,
   FaPlusCircle,
+  FaExclamationTriangle,
 } from "react-icons/fa";
 import type { Project } from "@/lib/types";
 import type { DateInfo } from "@/lib/dateUtils";
-import { computeDailyOvertime, computeDailyRegular, hasRequiredComment, isWeekUnlocked } from "@/lib/timesheetMath";
+import { computeDailyOvertime, computeDailyRegular, hasRequiredComment, hasCommentMismatch, isWeekUnlocked } from "@/lib/timesheetMath";
 import { isWeekend } from "@/lib/dateUtils";
 import { FaLock } from "react-icons/fa";
 import {
@@ -169,6 +171,7 @@ export default function TimesheetGrid({
   const [submitting, setSubmitting] = useState<string | null>(null);
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const [addingProject, setAddingProject] = useState(false);
+  const [categoryRowsExpanded, setCategoryRowsExpanded] = useState(false);
   const [rulesExpanded, setRulesExpanded] = useState(false);
   const [commentTarget, setCommentTarget] = useState<{
     rowKey: string;
@@ -222,13 +225,15 @@ export default function TimesheetGrid({
         label: `${p.project_number ? `#${p.project_number} - ` : ""}${p.client_name} - ${p.name}`,
         target: { projectId: p.id, category: null },
       }));
-    const categoryRows: RowDef[] = categories.map((c) => ({
+    const categoryRows: RowDef[] = categories
+      .filter((_, index) => categoryRowsExpanded || index === 0)
+      .map((c) => ({
       key: `c:${c}`,
       label: c,
       target: { projectId: null, category: c },
     }));
     return [...projectRows, ...categoryRows];
-  }, [addedProjectIds, projectsById, categories]);
+  }, [addedProjectIds, projectsById, categories, categoryRowsExpanded]);
 
   async function handleAddProject(projectId: string) {
     if (!projectId || addedProjectIds.has(projectId)) return;
@@ -475,16 +480,38 @@ export default function TimesheetGrid({
   }
 
   /**
-   * Mirrors v1's updateSubmitButtons() exactly: the Submit button is only
-   * shown (not just enabled) when the day genuinely qualifies —
+   * True when any project row on this date has hours that no longer match
+   * the sum of its own saved comment breakdown (see hasCommentMismatch) —
+   * e.g. the cell was edited directly after a structured comment was
+   * already saved for it. Both numbers must agree before the day submits.
+   */
+  function dayHasCommentMismatch(date: string): boolean {
+    const dayEntries = localData[date] ?? {};
+    for (const row of rows) {
+      if (!row.target.projectId) continue; // categories use plain-text comments, no breakdown to compare
+      const entry = dayEntries[row.key];
+      if (!entry) continue;
+      if (hasCommentMismatch(entry.hours, entry.comment)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Mirrors v1's updateSubmitButtons() exactly, plus one rule v1 never had
+   * to handle (structured comments didn't exist as a separate editable
+   * number back then): the Submit button is only shown (not just enabled)
+   * when the day genuinely qualifies —
    *  - Weekend: any hours logged at all (i.e. computed overtime > 0).
    *  - Weekday: daily total >= 7.75 hours AND every project row with
    *    hours > 0 that day has a saved, non-empty comment.
+   *  - Either case: no project row's hours may disagree with its own
+   *    saved comment breakdown's total.
    * Already-submitted (locked) days never show the button.
    */
   function shouldShowSubmitButton(date: string): boolean {
     if (locked.has(date)) return false;
     if (!isWeekUnlocked(date, locked)) return false;
+    if (dayHasCommentMismatch(date)) return false;
     const dailyTotal = dailyTotals[date] ?? 0;
 
     if (isWeekend(date)) {
@@ -801,6 +828,7 @@ export default function TimesheetGrid({
                 const isFullDay = !weekend && dayTotal >= STANDARD_DAILY_HOURS;
                 const isLocked = locked.has(d.date);
                 const weekGated = !readOnly && !isLocked && !weekUnlockedByDate[d.date];
+                const mismatchGated = !readOnly && !isLocked && !weekGated && dayHasCommentMismatch(d.date);
                 const showButton = !readOnly && shouldShowSubmitButton(d.date);
                 return (
                   <th
@@ -831,6 +859,14 @@ export default function TimesheetGrid({
                         className="mt-1 inline-flex items-center gap-1 text-[9px] text-amber-700 border border-amber-200 rounded-full px-1.5 py-0.5 bg-amber-50"
                       >
                         <FaLock className="h-2 w-2" /> Week locked
+                      </span>
+                    )}
+                    {mismatchGated && (
+                      <span
+                        title="A project's hours don't match its saved comment breakdown. Fix the highlighted cell (either edit the comment to match, or re-save it) before submitting."
+                        className="mt-1 inline-flex items-center gap-1 text-[9px] text-red-700 border border-red-200 rounded-full px-1.5 py-0.5 bg-red-50"
+                      >
+                        <FaExclamationTriangle className="h-2 w-2" /> Mismatch
                       </span>
                     )}
                     {showButton && (
@@ -884,6 +920,23 @@ export default function TimesheetGrid({
                         {projectsById[row.target.projectId]?.name}
                       </p>
                     </div>
+                  ) : row.target.category === categories[0] ? (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate">{row.label}</span>
+                      {categories.length > 1 && (
+                        <button
+                          type="button"
+                          aria-expanded={categoryRowsExpanded}
+                          aria-label={categoryRowsExpanded ? "Collapse category rows" : "Expand category rows"}
+                          title={categoryRowsExpanded ? "Collapse category rows" : "Expand category rows"}
+                          onClick={() => setCategoryRowsExpanded((expanded) => !expanded)}
+                          className="inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-[10px] font-medium text-accent hover:bg-sky-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                        >
+                          {categoryRowsExpanded ? <FaChevronDown className="h-2.5 w-2.5" /> : <FaChevronRight className="h-2.5 w-2.5" />}
+                          {categoryRowsExpanded ? "Hide" : `+${categories.length - 1}`}
+                        </button>
+                      )}
+                    </div>
                   ) : row.label}
                 </td>
                 {dateInfo.map((d) => {
@@ -898,6 +951,7 @@ export default function TimesheetGrid({
                   // a raw tooltip string — summarize them instead, matching
                   // the same shape CommentModal writes for project rows.
                   const commentTooltip = summarizeCommentForTooltip(cellVal?.comment);
+                  const cellMismatch = !!row.target.projectId && hasCommentMismatch(cellVal?.hours ?? 0, cellVal?.comment);
                   return (
                     <td
                       key={d.date}
@@ -912,7 +966,11 @@ export default function TimesheetGrid({
                           min={0}
                           disabled={isLocked}
                           defaultValue={cellVal?.hours ? cellVal.hours : ""}
-                          title={commentTooltip}
+                          title={
+                            cellMismatch
+                              ? `Grid hours (${(cellVal?.hours ?? 0).toFixed(2)}) don't match the saved comment breakdown. Open the comment to fix it.`
+                              : commentTooltip
+                          }
                           onChange={(e) => {
                             const input = e.target;
                             const rawValue = input.value.trim();
@@ -944,7 +1002,13 @@ export default function TimesheetGrid({
                           }}
                           className={`w-12 text-center rounded-md px-1 py-1 text-xs glass-input ${
                             isLocked ? "opacity-50 cursor-not-allowed" : ""
-                          } ${pendingCell === debounceKey ? "ring-1 ring-accent" : ""}`}
+                          } ${
+                            cellMismatch
+                              ? "ring-2 ring-red-500 border-red-500"
+                              : pendingCell === debounceKey
+                              ? "ring-1 ring-accent"
+                              : ""
+                          }`}
                         />
                         {!readOnly && (
                           <button
@@ -955,7 +1019,9 @@ export default function TimesheetGrid({
                             onMouseEnter={(event) => commentPresent && showCommentHover(event, row.label, d.date, commentTooltip)}
                             onMouseLeave={dismissCommentHoverSoon}
                             className={`shrink-0 h-5 w-5 rounded flex items-center justify-center text-[9px] ${
-                              commentPresent
+                              cellMismatch
+                                ? "bg-red-500 text-white animate-pulse"
+                                : commentPresent
                                 ? "bg-sky-500 text-white"
                                 : "bg-gray-200 text-gray-500 hover:bg-gray-300"
                             } ${isLocked ? "opacity-50 cursor-not-allowed" : ""}`}
@@ -1059,6 +1125,11 @@ export default function TimesheetGrid({
         onClose={() => setCommentTarget(null)}
         isProject={!!commentTarget?.target.projectId}
         readOnly={readOnly || (!!commentTarget && (locked.has(commentTarget.date) || !weekUnlockedByDate[commentTarget.date]))}
+        initialHours={
+          commentTarget
+            ? localData[commentTarget.date]?.[commentTarget.rowKey]?.hours ?? 0
+            : 0
+        }
         displayComment={
           commentTarget
             ? summarizeCommentForTooltip(localData[commentTarget.date]?.[commentTarget.rowKey]?.comment)

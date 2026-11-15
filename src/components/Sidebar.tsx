@@ -19,6 +19,7 @@ import {
   FaTimes,
   FaTrashAlt,
   FaFileExcel,
+  FaLockOpen,
 } from "react-icons/fa";
 import type { IconType } from "react-icons";
 import type { SessionPayload } from "@/lib/types";
@@ -37,6 +38,7 @@ const adminLinks: { href: string; label: string; Icon: IconType }[] = [
   { href: "/create_employee", label: "Create Employee", Icon: FaUserPlus },
   { href: "/database_stats", label: "Database Stats", Icon: FaDatabase },
   { href: "/reports", label: "Reports", Icon: FaChartBar },
+  { href: "/reopen_timesheets", label: "Reopen Timesheets", Icon: FaLockOpen },
   { href: "/insights", label: "Insights", Icon: FaChartPie },
   { href: "/export_timesheet", label: "Export Timesheet", Icon: FaFileExcel },
   { href: "/delete_old_entries", label: "Delete Old Entries", Icon: FaTrashAlt },

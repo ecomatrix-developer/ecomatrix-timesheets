@@ -17,13 +17,14 @@ import type { Project, PublicUser } from "@/lib/types";
  * template has no PTO/Vacation rows either).
  *
  * IMPORTANT — why this does NOT use `project.project_type`:
- * every project migrated from the legacy MongoDB system was imported with
- * project_type hardcoded to "Energy Modelling" (see
- * scripts/import-mongo-to-supabase.cjs), and nothing in the admin UI has
- * gone back and corrected it since — confirmed live: all 190 projects in
- * production currently have project_type = "Energy Modelling", including
- * projects that are unambiguously BIM work (e.g. "Deer Lodge Centre",
- * "RBC Convention Centre"). That column is not a usable signal.
+ * `project_type` is now correctly backfilled from the legacy MongoDB field
+ * (2026-11-15, after scripts/import-mongo-to-supabase.cjs was found to have
+ * hardcoded every imported project to "Energy Modelling" regardless of its
+ * real Mongo value — fixed in that script and backfilled in Supabase for all
+ * 191 production projects). But it's still the wrong granularity for this
+ * export: it's one label per *project*, while a single project routinely has
+ * both Energy and BIM hours logged against it in the same month (e.g. one
+ * employee doing BIM-CAD work on an otherwise Energy-Modelling-typed job).
  *
  * The REAL signal is each entry's structured comment breakdown (see
  * CommentModal.tsx / COMMENT_CATEGORIES in lib/constants.ts) — confirmed

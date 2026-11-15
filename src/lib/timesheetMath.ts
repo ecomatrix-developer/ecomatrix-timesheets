@@ -11,6 +11,37 @@ export function computeDailyOvertime(dateStr: string, totalHours: number): numbe
   return Math.max(0, totalHours - STANDARD_DAILY_HOURS);
 }
 
+/**
+ * Sum of hours in a structured per-category comment breakdown (the JSON
+ * array CommentModal writes for a project row — see its own docs). Returns
+ * null when `comment` isn't a non-empty structured breakdown at all (plain
+ * free text, empty, or a category row's comment) — callers should treat
+ * null as "no breakdown to compare against", not as a mismatch.
+ */
+export function structuredCommentTotal(comment: string | null | undefined): number | null {
+  const trimmed = (comment ?? "").trim();
+  if (!trimmed || trimmed === "[]") return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    return parsed.reduce((sum: number, row) => sum + (Number(row?.hours) || 0), 0);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when a project row's saved hours no longer match its own structured
+ * comment breakdown — e.g. the breakdown was saved via the modal (which
+ * sets hours = sum of the breakdown), then the cell's hours were edited
+ * directly afterward without reopening the modal. Both numbers must agree
+ * before the day can be submitted.
+ */
+export function hasCommentMismatch(hours: number, comment: string | null | undefined): boolean {
+  const total = structuredCommentTotal(comment);
+  return total !== null && Math.abs(hours - total) > 0.001;
+}
+
 /** "Regular" (non-overtime) portion of a day's hours, used in PDF grids. */
 export function computeDailyRegular(dateStr: string, totalHours: number): number {
   if (isWeekend(dateStr)) return 0;

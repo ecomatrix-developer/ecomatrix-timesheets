@@ -52,10 +52,12 @@ The legacy source is the `timesheetDB` MongoDB database. The importer at
 `scripts/import-mongo-to-supabase.cjs` maps Mongo user names to Supabase user
 UUIDs, Mongo project IDs to Supabase project UUIDs, and legacy category values
 to the `category` column. It bcrypt-hashes legacy passwords, preserves Mongo
-IDs in `mongo_id`, and defaults project types to `Energy Modelling` because
-the legacy project documents have no project-type field. Since the legacy
-records do not contain creation timestamps, the importer sets those to the
-import time; timezone-free `submitted_at` values are interpreted as UTC.
+IDs in `mongo_id`, and carries over each project's real `project_type` field
+from Mongo (set via the v1 app's edit-project form), defaulting to
+`Energy Modelling` only for legacy/untyped projects — same default the v1 app
+itself uses. Since the legacy records do not contain creation timestamps, the
+importer sets those to the import time; timezone-free `submitted_at` values
+are interpreted as UTC.
 
 From the project root in PowerShell, set the Mongo URI in the same terminal
 session without putting it in shell history:

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireSession, requireAdmin } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { canSubmitDay, isWeekUnlocked } from "@/lib/timesheetMath";
+import { canSubmitDay, isWeekUnlocked, hasCommentMismatch } from "@/lib/timesheetMath";
 import { isWeekend, getPrecedingWeekdays } from "@/lib/dateUtils";
 
 /**
@@ -146,6 +146,27 @@ export async function submitDayAction(dateStr: string): Promise<SubmitDayResult>
   const check = canSubmitDay(dateStr, totalExcludingOvertimeLogged);
   if (!check.ok) {
     return { success: false, error: check.reason };
+  }
+
+  // New rule (server-side mirror of the client's dayHasCommentMismatch):
+  // a project row's hours must still match the sum of its own saved
+  // comment breakdown — catches a cell edited directly after a structured
+  // comment was already saved for it, which the client hides the Submit
+  // button for but a direct action call could otherwise bypass.
+  for (const e of entries ?? []) {
+    if (!e.project_id) continue;
+    if (hasCommentMismatch(Number(e.hours ?? 0), e.comment)) {
+      const { data: project } = await supabaseAdmin
+        .from("projects")
+        .select("name")
+        .eq("id", e.project_id)
+        .maybeSingle();
+      const projectName = project?.name ?? "Unknown Project";
+      return {
+        success: false,
+        error: `'${projectName}''s hours don't match its saved comment breakdown. Open the comment and re-save it, or adjust the hours to match.`,
+      };
+    }
   }
 
   // Mirrors v1's second server-side check (weekdays only, exactly like the

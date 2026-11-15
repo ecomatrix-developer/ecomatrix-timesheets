@@ -28,6 +28,7 @@ export default function CommentModal({
   onClose,
   isProject,
   readOnly = false,
+  initialHours,
   displayComment = "",
   initialComment,
   onSaveStructured,
@@ -37,6 +38,7 @@ export default function CommentModal({
   onClose: () => void;
   isProject: boolean;
   readOnly?: boolean;
+  initialHours: number;
   displayComment?: string;
   initialComment: string;
   onSaveStructured: (rows: CommentRow[], totalHours: number) => void;
@@ -45,6 +47,7 @@ export default function CommentModal({
   const [mounted, setMounted] = useState(false);
   const [rows, setRows] = useState<CommentRow[]>([]);
   const [simpleText, setSimpleText] = useState("");
+  const [validationError, setValidationError] = useState("");
 
   useEffect(() => setMounted(true), []);
 
@@ -54,17 +57,25 @@ export default function CommentModal({
       try {
         const parsed = JSON.parse(initialComment);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          setRows(parsed);
+          let remainingHours = Math.max(0, initialHours);
+          const alignedRows = (parsed as CommentRow[]).map((row) => {
+            const sourceHours = Math.max(0, Number(row.hours) || 0);
+            const hours = Math.min(sourceHours, remainingHours);
+            remainingHours -= hours;
+            return { ...row, hours };
+          });
+          if (remainingHours > 0) alignedRows.push({ hours: remainingHours, category: "" });
+          setRows(alignedRows);
         } else {
-          setRows([{ hours: 0, category: "" }]);
+          setRows([{ hours: Math.max(0, initialHours), category: "" }]);
         }
       } catch {
-        setRows([{ hours: 0, category: "" }]);
+        setRows([{ hours: Math.max(0, initialHours), category: "" }]);
       }
     } else {
       setSimpleText(initialComment ?? "");
     }
-  }, [open, isProject, initialComment]);
+  }, [open, isProject, initialComment, initialHours]);
 
   function addRow() {
     setRows((prev) => [...prev, { hours: 0, category: "" }]);
@@ -75,6 +86,7 @@ export default function CommentModal({
   }
 
   function updateRow(index: number, patch: Partial<CommentRow>) {
+    setValidationError("");
     setRows((prev) =>
       prev.map((r, i) => {
         if (i !== index) return r;
@@ -91,6 +103,10 @@ export default function CommentModal({
   }
 
   function handleSaveStructured() {
+    if (rows.some((row) => row.category === "Other" && !row.detail?.trim())) {
+      setValidationError("Add details for every row categorized as Other before saving.");
+      return;
+    }
     // Matches v1's saveCommentFromModal: only rows with hours > 0 are
     // kept, and the grid cell's new value is the sum of those hours.
     const kept = rows.filter((r) => r.hours > 0);
@@ -212,6 +228,9 @@ export default function CommentModal({
                   >
                     <FaPlus className="h-3 w-3" /> Add Row
                   </button>
+                  {validationError && (
+                    <p role="alert" className="mt-2 text-xs text-red-600">{validationError}</p>
+                  )}
                 </>
               ) : (
                 <textarea

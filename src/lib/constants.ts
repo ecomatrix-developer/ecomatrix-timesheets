@@ -1,31 +1,20 @@
-// Business-rule constants mirrored from v1's app.py (TIMESHEET_DATA) plus
-// the 5 extra categories discovered in production data during migration
-// (see supabase_patch_1_add_categories.sql). All 13 must always be present.
+// Timesheet category rows shown in employee, admin, and report grids.
 
 export const SPECIAL_CATEGORIES = [
   "Statutory holiday",
   "Vacation",
+  "Special Vacation",
   "Sicktime",
   "Training / Research",
   "Overhead",
-  "Overtime Logged",
   "PTO",
   "PTO BANKING",
-  // Discovered in live production data, kept verbatim (not merged):
-  "Special Vacation",
   "Special Vacation Banking",
-  "Research Initiatives",
-  "Training",
-  "empty_0",
 ] as const;
 
 export type SpecialCategory = (typeof SPECIAL_CATEGORIES)[number];
 
-// 'Overtime Logged' is computed, never entered directly — filtered out of
-// every grid, exactly like v1.
-export const CATEGORIES_FOR_GRID = SPECIAL_CATEGORIES.filter(
-  (c) => c !== "Overtime Logged"
-);
+export const CATEGORIES_FOR_GRID = [...SPECIAL_CATEGORIES];
 
 export const PROJECT_STATUSES = [
   "active",

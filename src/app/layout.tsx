@@ -6,6 +6,7 @@ import "react-day-picker/style.css";
 import { getSession } from "@/lib/session";
 import Sidebar from "@/components/Sidebar";
 import ToastProvider from "@/components/ToastProvider";
+import AIAssistantWidget from "@/components/AIAssistantWidget";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -53,6 +54,7 @@ export default async function RootLayout({
             </Link>
           </footer>
         ) : null}
+        {session?.role === "admin" ? <AIAssistantWidget /> : null}
       </body>
     </html>
   );

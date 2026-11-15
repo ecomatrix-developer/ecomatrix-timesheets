@@ -27,11 +27,17 @@ async function getAllTimesheetEntriesForInsights() {
 
   const total = count ?? 0;
   const batches = Math.max(1, Math.ceil(total / BATCH_SIZE));
+  // .order("id") is required, not cosmetic: Postgres gives no row-order
+  // guarantee across separate .range() calls without an explicit order, so
+  // two batches of the same query can skip or duplicate rows at the
+  // boundary once the table exceeds BATCH_SIZE rows (confirmed live — see
+  // the identical fix in src/lib/ai/dataTools.ts).
   const results = await Promise.all(
     Array.from({ length: batches }, (_, i) =>
       supabaseAdmin
         .from("timesheet_entries")
         .select("project_id, category, employee_id, hours, comment, entry_date")
+        .order("id")
         .range(i * BATCH_SIZE, i * BATCH_SIZE + BATCH_SIZE - 1)
     )
   );

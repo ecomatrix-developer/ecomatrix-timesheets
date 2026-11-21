@@ -18,7 +18,8 @@ import {
   FaPlusCircle,
   FaExclamationTriangle,
 } from "react-icons/fa";
-import type { Project } from "@/lib/types";
+import type { Project, ProjectScope } from "@/lib/types";
+import { buildProjectDisplayName } from "@/lib/projectNaming";
 import type { DateInfo } from "@/lib/dateUtils";
 import { computeDailyOvertime, computeDailyRegular, hasRequiredComment, hasCommentMismatch, isWeekUnlocked } from "@/lib/timesheetMath";
 import { isWeekend } from "@/lib/dateUtils";
@@ -125,6 +126,7 @@ function CommentHoverCard({
 
 export default function TimesheetGrid({
   projects,
+  selectableProjects,
   categories,
   dateInfo,
   entriesByDate,
@@ -137,8 +139,17 @@ export default function TimesheetGrid({
   specialVacationBankedYear,
   onMonthChange,
   isAdminViewer,
+  projectTaskMap,
+  projectScopeNames,
+  scopes,
 }: {
   projects: Project[];
+  // v3.0 (supabase_patch_12): the subset of `projects` this viewer may add
+  // as a NEW row (see lib/projectVisibility.ts). Optional — every caller
+  // that doesn't pass it (read-only Reports/admin views, which hide the
+  // picker entirely anyway) keeps showing the full `projects` list, same
+  // as before this field existed.
+  selectableProjects?: Project[];
   categories: string[];
   dateInfo: DateInfo[];
   entriesByDate: Record<string, Record<string, GridEntryValue>>;
@@ -163,9 +174,26 @@ export default function TimesheetGrid({
   // "Overtime Summary (This Month)" card only an admin viewer sees, even
   // when looking at their OWN editable grid (not just read-only views).
   isAdminViewer?: boolean;
+  // v3.0: project_id -> its scope-filtered task names (see lib/taxonomy.ts
+  // buildProjectTaskMap), computed once server-side. Optional — every
+  // existing caller that doesn't pass it keeps CommentModal's original
+  // flat COMMENT_CATEGORIES behavior (see CommentModal's own fallback).
+  projectTaskMap?: Record<string, string[]>;
+  // v3.0 (supabase_patch_9/13): project_id -> scope name(s), for the
+  // "Project Selection" picker's category filter (see lib/taxonomy.ts
+  // buildProjectScopeNameMap) — replaces filtering by the old flat
+  // project_type. Both optional; omitting either keeps
+  // SearchableProjectSelect's original project_type-based filter.
+  projectScopeNames?: Record<string, string[]>;
+  scopes?: ProjectScope[];
 }) {
   const router = useRouter();
   const [localData, setLocalData] = useState(entriesByDate);
+  // Bumped per-cell only when a comment-modal save overwrites that cell's
+  // hours (not on every direct keystroke) — forces the uncontrolled hours
+  // <input> below to remount and pick up the new defaultValue, since React
+  // won't otherwise refresh defaultValue on an already-mounted input.
+  const [commentSyncVersion, setCommentSyncVersion] = useState<Record<string, number>>({});
   const [locked, setLocked] = useState(new Set(submittedDates));
   const [pendingCell, setPendingCell] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<string | null>(null);
@@ -222,7 +250,7 @@ export default function TimesheetGrid({
       .filter((p): p is Project => !!p)
       .map((p) => ({
         key: `p:${p.id}`,
-        label: `${p.project_number ? `#${p.project_number} - ` : ""}${p.client_name} - ${p.name}`,
+        label: buildProjectDisplayName(p),
         target: { projectId: p.id, category: null },
       }));
     const categoryRows: RowDef[] = categories
@@ -544,6 +572,8 @@ export default function TimesheetGrid({
       ...prev,
       [date]: { ...prev[date], [rowKey]: { hours: totalHours, comment: commentJSON } },
     }));
+    const syncKey = `${rowKey}|${date}`;
+    setCommentSyncVersion((prev) => ({ ...prev, [syncKey]: (prev[syncKey] ?? 0) + 1 }));
     const result = await updateTimesheetCellAction(target, date, totalHours, commentJSON);
     if (!result.success) {
       toast.error(result.error ?? "Failed to save comment.");
@@ -805,17 +835,19 @@ export default function TimesheetGrid({
           </div>
           <div className="p-4">
             <SearchableProjectSelect
-              projects={projects}
+              projects={selectableProjects ?? projects}
               onSelectProject={handleAddProject}
               disabled={addingProject}
               addedProjectIds={addedProjectIds}
+              scopes={scopes}
+              projectScopeNames={projectScopeNames}
             />
           </div>
         </div>
       )}
 
       {/* 5. Main Timesheet Grid Table */}
-      <div className="glass overflow-x-auto scrollbar-thin rounded-xl">
+      <div className="glass overflow-x-auto scrollbar-x-thin rounded-xl">
         <table className="text-xs border-collapse min-w-max">
           <thead>
             <tr>
@@ -961,6 +993,7 @@ export default function TimesheetGrid({
                     >
                       <div className="flex items-center justify-center gap-0.5">
                         <input
+                          key={`${debounceKey}|${commentSyncVersion[debounceKey] ?? 0}`}
                           type="number"
                           step="0.25"
                           min={0}
@@ -1139,6 +1172,11 @@ export default function TimesheetGrid({
           commentTarget
             ? localData[commentTarget.date]?.[commentTarget.rowKey]?.comment ?? ""
             : ""
+        }
+        categoryOptions={
+          commentTarget?.target.projectId
+            ? projectTaskMap?.[commentTarget.target.projectId]
+            : undefined
         }
         onSaveStructured={handleSaveStructuredComment}
         onSaveSimple={handleSaveSimpleComment}

@@ -33,6 +33,7 @@ export default function CommentModal({
   initialComment,
   onSaveStructured,
   onSaveSimple,
+  categoryOptions,
 }: {
   open: boolean;
   onClose: () => void;
@@ -43,6 +44,12 @@ export default function CommentModal({
   initialComment: string;
   onSaveStructured: (rows: CommentRow[], totalHours: number) => void;
   onSaveSimple: (text: string) => void;
+  // v3.0: the calling project's scope-filtered task list (see
+  // lib/taxonomy.ts buildProjectTaskMap). Falls back to the original
+  // flat COMMENT_CATEGORIES when not provided or empty — e.g. before
+  // supabase_patch_9 has been run, or a project with no scope assigned
+  // yet — so this modal never shows a dead-empty dropdown.
+  categoryOptions?: string[];
 }) {
   const [mounted, setMounted] = useState(false);
   const [rows, setRows] = useState<CommentRow[]>([]);
@@ -197,7 +204,23 @@ export default function CommentModal({
                             value={row.category}
                             onChange={(value) => updateRow(i, { category: value })}
                             placeholder="-- Select Category --"
-                            options={COMMENT_CATEGORIES.map((c) => ({ value: c, label: c }))}
+                            // A row saved before this project had its current
+                            // scope/taxonomy may hold a category name that no
+                            // longer appears in categoryOptions (e.g. the old
+                            // "BIM-CAD" before supabase_patch_9 renamed it) —
+                            // without this, the dropdown would show blank
+                            // instead of that still-correct saved value, even
+                            // though nothing was actually lost. Always keep
+                            // the row's own current value selectable.
+                            options={(() => {
+                              const base: readonly string[] = categoryOptions && categoryOptions.length > 0
+                                ? categoryOptions
+                                : COMMENT_CATEGORIES;
+                              const list = row.category && !base.includes(row.category)
+                                ? [row.category, ...base]
+                                : base;
+                              return list.map((c) => ({ value: c, label: c }));
+                            })()}
                           />
                           {row.category === "Other" ? (
                             <input

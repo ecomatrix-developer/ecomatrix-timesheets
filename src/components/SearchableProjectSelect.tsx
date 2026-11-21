@@ -3,13 +3,19 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { FaSearch, FaTimes, FaPlus, FaCheck, FaFolderOpen, FaChevronDown } from "react-icons/fa";
-import type { Project } from "@/lib/types";
+import type { Project, ProjectScope } from "@/lib/types";
 
 interface SearchableProjectSelectProps {
   projects: Project[];
   onSelectProject: (projectId: string) => void;
   disabled?: boolean;
   addedProjectIds: Set<string>;
+  // v3.0 (supabase_patch_9/13): when both are non-empty, the "Project
+  // type" filter switches from the old flat project_type to the real
+  // scope(s) — Energy, BIM - Revit, BIM - CAD, Marketing & BD, etc. Falls
+  // back to the original project_type filter otherwise, byte-for-byte.
+  scopes?: ProjectScope[];
+  projectScopeNames?: Record<string, string[]>;
 }
 
 export default function SearchableProjectSelect({
@@ -17,11 +23,14 @@ export default function SearchableProjectSelect({
   onSelectProject,
   disabled,
   addedProjectIds,
+  scopes = [],
+  projectScopeNames = {},
 }: SearchableProjectSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedType, setSelectedType] = useState<string>("All");
   const [selectedStatus, setSelectedStatus] = useState<string>("All");
+  const useScopeFilter = scopes.length > 0;
   const containerRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const [panelRect, setPanelRect] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
@@ -72,25 +81,36 @@ export default function SearchableProjectSelect({
     };
   }, [isOpen, updatePanelRect]);
 
-  const types = ["All", "Energy Modelling", "BIM and AutoCad"];
+  const types = useScopeFilter
+    ? ["All", ...scopes.map((s) => s.name)]
+    : ["All", "Energy Modelling", "BIM and AutoCad"];
   const statuses = ["All", "active", "completed", "re-work", "archived"];
 
   const filteredProjects = projects.filter((p) => {
     if (selectedStatus !== "All" && p.status !== selectedStatus) {
       return false;
     }
-    // Filter by type pill
-    if (selectedType !== "All" && p.project_type !== selectedType) {
-      return false;
+    // Filter by type/category pill
+    if (selectedType !== "All") {
+      if (useScopeFilter) {
+        if (!(projectScopeNames[p.id] ?? []).includes(selectedType)) return false;
+      } else if (p.project_type !== selectedType) {
+        return false;
+      }
     }
-    // Filter by search query across name, project_number, client_name, project_type
+    // Filter by search query across name, project_number, client_name, project_type.
+    // v3.0: also matches eco_matrix_number and client_project_number —
+    // "search matches either number" (brief section 3).
     if (!search.trim()) return true;
     const term = search.toLowerCase().trim();
     return (
       (p.name && p.name.toLowerCase().includes(term)) ||
       (p.project_number && p.project_number.toLowerCase().includes(term)) ||
+      (p.eco_matrix_number && p.eco_matrix_number.toLowerCase().includes(term)) ||
+      (p.client_project_number && p.client_project_number.toLowerCase().includes(term)) ||
       (p.client_name && p.client_name.toLowerCase().includes(term)) ||
       (p.project_type && p.project_type.toLowerCase().includes(term)) ||
+      (projectScopeNames[p.id] ?? []).some((name) => name.toLowerCase().includes(term)) ||
       p.status.toLowerCase().includes(term)
     );
   });
@@ -172,7 +192,9 @@ export default function SearchableProjectSelect({
           </div>
 
           <div className="flex shrink-0 flex-nowrap items-center gap-1.5 overflow-x-auto pb-1 border-b border-gray-100 scrollbar-none">
-            <span className="text-[11px] font-semibold text-muted shrink-0 mr-1">Project type:</span>
+            <span className="text-[11px] font-semibold text-muted shrink-0 mr-1">
+              {useScopeFilter ? "Category:" : "Project type:"}
+            </span>
             {types.map((type) => {
               const active = selectedType === type;
               return (
@@ -220,7 +242,7 @@ export default function SearchableProjectSelect({
                         <span>Client: {p.client_name}</span>
                         <span>•</span>
                         <span className="text-violet-600 bg-violet-50 px-1.5 py-0.2 rounded text-[10px]">
-                          {p.project_type}
+                          {(projectScopeNames[p.id] ?? []).join(", ") || p.project_type}
                         </span>
                       </div>
                     </div>

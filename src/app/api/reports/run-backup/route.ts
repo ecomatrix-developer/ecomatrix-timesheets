@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import { getSession } from "@/lib/session";
+import { NextRequest, NextResponse } from "next/server";
+import { getSession, isSuperAdminOnly } from "@/lib/session";
 import { getAllUsers, getAllProjects, toProjectMap } from "@/lib/data";
 import { buildGridFromEntries, previousWeekRange } from "@/lib/reportData";
 import { renderPdfInChildProcess } from "@/lib/pdf/renderInChildProcess";
@@ -7,18 +7,21 @@ import { sendReportEmail } from "@/lib/mailer";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import type { TimesheetEntry } from "@/lib/types";
 
-/**
- * Mirrors v1's /run-backup-now, which generates AND EMAILS every employee's
- * weekly timesheet PDF. SECURITY FIX vs v1: that route had NO auth check at
- * all — any anonymous visitor could trigger PDF generation and outbound
- * email. Here it requires an authenticated admin session.
- */
-export async function POST() {
-  const session = await getSession();
-  if (!session || session.role !== "admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+// Abeer, 2026-11-21: "weekly backup - save on drive... and send to
+// anup@ecomatrix.io" — Drive upload deferred until real OAuth credentials
+// for that account exist (see conversation); for now, emailed properly to
+// both addresses he gave. Configurable via WEEKLY_BACKUP_RECIPIENTS
+// (comma-separated) so this never needs a code change to adjust later —
+// falls back to the two literal addresses if that env var isn't set.
+function getBackupRecipients(): string[] {
+  const configured = process.env.WEEKLY_BACKUP_RECIPIENTS;
+  if (configured) {
+    return configured.split(",").map((s) => s.trim()).filter(Boolean);
   }
+  return ["anup@ecomatrix.io", "ervtool.ecomatrix@gmail.com"];
+}
 
+async function runWeeklyBackup() {
   const { dates } = previousWeekRange();
   const [users, projects, { data: weekEntries, error: entriesErr }] = await Promise.all([
     getAllUsers(),
@@ -32,7 +35,7 @@ export async function POST() {
   if (entriesErr) throw entriesErr;
   const employees = users.filter((u) => u.role === "employee");
   const projectMap = toProjectMap(projects);
-  const adminEmail = process.env.ADMIN_EMAIL;
+  const recipients = getBackupRecipients();
 
   // One query for every employee's week instead of one query per employee.
   const entriesByEmployee = new Map<string, TimesheetEntry[]>();
@@ -55,22 +58,52 @@ export async function POST() {
       { grid }
     );
 
-    if (adminEmail) {
+    if (recipients.length > 0) {
       const emailResult = await sendReportEmail(
-        [adminEmail],
+        recipients,
         `Weekly Timesheet Backup: ${emp.username} (Week of ${dates[0]})`,
         `Attached is the timesheet report for ${emp.username} for the week of ${dates[0]}.`,
         { filename: `timesheet_${emp.username}_${dates[0]}.pdf`, content: pdfBuffer }
       );
       results.push({ username: emp.username, emailed: emailResult.sent, reason: emailResult.reason });
     } else {
-      results.push({ username: emp.username, emailed: false, reason: "ADMIN_EMAIL not configured" });
+      results.push({ username: emp.username, emailed: false, reason: "No backup recipients configured" });
     }
   }
 
-  return NextResponse.json({
+  return {
     success: true,
     week: { start: dates[0], end: dates[dates.length - 1] },
     results,
-  });
+  };
+}
+
+/**
+ * Manual trigger (the "Run Backup Now" button on Database Stats) —
+ * requires an authenticated Super Admin session, same as before.
+ */
+export async function POST() {
+  const session = await getSession();
+  if (!session || !isSuperAdminOnly(session)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+  return NextResponse.json(await runWeeklyBackup());
+}
+
+/**
+ * Automatic weekly trigger — Vercel Cron Jobs call routes via GET, not
+ * POST, and have no browser session to check, so this is gated on
+ * CRON_SECRET instead: Vercel sends `Authorization: Bearer $CRON_SECRET`
+ * on every cron-invoked request (set CRON_SECRET in the Vercel project's
+ * environment variables, and it's included automatically — see
+ * vercel.json for the schedule). Without a matching header, this behaves
+ * exactly like an unauthenticated request to any other admin route.
+ */
+export async function GET(request: NextRequest) {
+  const secret = process.env.CRON_SECRET;
+  const authHeader = request.headers.get("authorization");
+  if (!secret || authHeader !== `Bearer ${secret}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
+  return NextResponse.json(await runWeeklyBackup());
 }

@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/session";
+import { getSession, isSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import PageTransition from "@/components/PageTransition";
 import GlassCard from "@/components/GlassCard";
@@ -52,7 +52,7 @@ export default async function DatabaseStatsPage({
 }) {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (session.role !== "admin") redirect("/login");
+  if (!isSuperAdminOnly(session)) redirect("/login");
 
   const resolvedSearchParams = await searchParams;
   const dateRange = resolveDateRange(resolvedSearchParams);
@@ -137,6 +137,47 @@ export default async function DatabaseStatsPage({
   const { data: pagedProjects, count: projectsCount, error: projectsErr } = projectsPageRes;
   if (projectsErr) throw projectsErr;
 
+  // v3.0 (2026-11-21): absorbs the old standalone /delete_old_entries page
+  // ("move that to the database stats itself... make that as last option")
+  // — same queries that page used to run, now feeding a section at the
+  // bottom of this one instead of a separate route.
+  const [{ data: earliestRow }, { data: latestRow }] = await Promise.all([
+    supabaseAdmin.from("timesheet_entries").select("entry_date").order("entry_date", { ascending: true }).limit(1),
+    supabaseAdmin.from("timesheet_entries").select("entry_date").order("entry_date", { ascending: false }).limit(1),
+  ]);
+  const earliestDate = earliestRow?.[0]?.entry_date ?? null;
+  const latestDate = latestRow?.[0]?.entry_date ?? null;
+
+  let monthCounts: { monthYear: string; count: number }[] = [];
+  if (earliestDate && latestDate) {
+    const [earliestY, earliestM] = earliestDate.split("-").map(Number);
+    const [latestY, latestM] = latestDate.split("-").map(Number);
+    const totalMonths = (latestY - earliestY) * 12 + (latestM - earliestM) + 1;
+    const monthsToShow = Math.min(36, totalMonths);
+    const monthDefs = Array.from({ length: monthsToShow }, (_, i) => {
+      const d = new Date(latestY, latestM - 1 - i, 1);
+      const y = d.getFullYear();
+      const m = d.getMonth() + 1;
+      const monthStr = String(m).padStart(2, "0");
+      const startDate = `${y}-${monthStr}-01`;
+      const lastDay = new Date(y, m, 0).getDate();
+      const endDate = `${y}-${monthStr}-${String(lastDay).padStart(2, "0")}`;
+      return { monthYear: `${y}-${monthStr}`, startDate, endDate };
+    });
+    const counts = await Promise.all(
+      monthDefs.map(({ startDate, endDate }) =>
+        supabaseAdmin
+          .from("timesheet_entries")
+          .select("*", { count: "exact", head: true })
+          .gte("entry_date", startDate)
+          .lte("entry_date", endDate)
+      )
+    );
+    monthCounts = monthDefs
+      .map(({ monthYear }, i) => ({ monthYear, count: counts[i].count ?? 0 }))
+      .filter((m) => m.count > 0);
+  }
+
   return (
     <PageTransition>
       <div className="w-full">
@@ -198,9 +239,7 @@ export default async function DatabaseStatsPage({
             </>
           ) : (
             <p className="text-sm text-muted">
-              Real on-disk size isn&apos;t available yet — run{" "}
-              <code className="px-1 rounded bg-gray-100">supabase_patch_3_database_size_rpc.sql</code>{" "}
-              in the Supabase SQL Editor once to enable this. Row counts above are still accurate.
+              Real on-disk size isn&apos;t available yet. Row counts above are still accurate.
             </p>
           )}
         </GlassCard>
@@ -237,6 +276,10 @@ export default async function DatabaseStatsPage({
           projectsPage={projectsPage}
           projectsTotalPages={Math.max(1, Math.ceil((projectsCount ?? 0) / PAGE_SIZE))}
           projectsTotal={projectsCount ?? 0}
+          totalEntries={entries}
+          earliestDate={earliestDate}
+          latestDate={latestDate}
+          monthCounts={monthCounts}
         />
       </div>
     </PageTransition>

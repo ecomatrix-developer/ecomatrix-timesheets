@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/session";
+import { getSession, isSuperAdminOnly } from "@/lib/session";
 import { getUserByUsername, getAllProjects, toProjectMap } from "@/lib/data";
 import { buildEmployeeWeeklyGrid } from "@/lib/reportData";
 import { renderPdfInChildProcess } from "@/lib/pdf/renderInChildProcess";
@@ -8,7 +8,7 @@ import { renderPdfInChildProcess } from "@/lib/pdf/renderInChildProcess";
 // download of a single employee's weekly grid, generated in memory.
 export async function GET(req: NextRequest) {
   const session = await getSession();
-  if (!session || session.role !== "admin") {
+  if (!session || !isSuperAdminOnly(session)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   }
 

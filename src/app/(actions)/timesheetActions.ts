@@ -1,10 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireSession, requireAdmin } from "@/lib/session";
+import { requireSession, requireSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { canSubmitDay, isWeekUnlocked, hasCommentMismatch } from "@/lib/timesheetMath";
 import { isWeekend, getPrecedingWeekdays } from "@/lib/dateUtils";
+import { isProjectSelectableBySession } from "@/lib/projectVisibility";
+import type { Project } from "@/lib/types";
 
 /**
  * Server-side check for the "finish last week before starting a new one"
@@ -213,9 +215,13 @@ export async function submitDayAction(dateStr: string): Promise<SubmitDayResult>
   return { success: true };
 }
 
-/** Admin action: unlock a submitted day by deleting its submitted_days row. */
+/**
+ * Super-Admin-only (Abeer, 2026-11-21: "admin reopen option i dont want
+ * that" — moved off plain Admin, matching the page guards on both of this
+ * action's callers, /reopen_timesheets and /reports).
+ */
 export async function reopenDayAction(employeeId: string, dateStr: string) {
-  await requireAdmin();
+  await requireSuperAdminOnly();
   const { error } = await supabaseAdmin
     .from("submitted_days")
     .delete()
@@ -238,6 +244,19 @@ export async function reopenDayAction(employeeId: string, dateStr: string) {
  */
 export async function addProjectRowAction(projectId: string, firstDateOfMonth: string) {
   const session = await requireSession();
+
+  // v3.0 (supabase_patch_12): re-checked server-side, not just hidden from
+  // the picker — a project narrowed to "Intern" only must not be addable
+  // by a direct call either. Missing project or missing column (pre-
+  // migration) both fail open, matching the read-side filter exactly.
+  const { data: targetProject } = await supabaseAdmin
+    .from("projects")
+    .select("*")
+    .eq("id", projectId)
+    .maybeSingle();
+  if (targetProject && !isProjectSelectableBySession(targetProject as Project, session)) {
+    return { success: false, error: "This project isn't available to your account." };
+  }
 
   if (!(await checkWeekUnlocked(session.userId, firstDateOfMonth))) {
     return {

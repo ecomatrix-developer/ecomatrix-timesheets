@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/session";
+import { getSession, isSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getAllUsers } from "@/lib/data";
 import { PAGE_SIZE } from "@/lib/constants";
@@ -25,7 +25,10 @@ export default async function ReopenTimesheetsPage({
 }) {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (session.role !== "admin") redirect("/dashboard");
+  // Abeer, 2026-11-21: "admin reopen option i dont want that" — moved from
+  // plain-admin-reachable to Super-Admin-only, matching the other 6 pages
+  // already gated this way (database_stats, create_employee, ...).
+  if (!isSuperAdminOnly(session)) redirect("/login");
 
   const resolvedSearchParams = await searchParams;
   const selectedMonth = resolvedSearchParams.month ?? null; // "YYYY-MM"

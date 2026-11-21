@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import type { Project, ProjectType } from "@/lib/types";
+import type { Project, ProjectScope, ProjectType } from "@/lib/types";
 import { PROJECT_STATUSES } from "@/lib/constants";
 import { deleteProjectAction } from "@/app/(actions)/projectActions";
 import Modal from "@/components/Modal";
@@ -26,10 +26,32 @@ const TYPE_COLORS: Record<string, string> = {
   "BIM and AutoCad": "bg-teal-100 text-teal-700 border-teal-200",
 };
 
+// v3.0 (supabase_patch_9/13): scope names are DB-driven (Energy, BIM -
+// Revit, BIM - CAD, Marketing & BD, ...), so colors can't be hardcoded per
+// name the way the old 2-value TYPE_COLORS is — cycle through a small
+// fixed palette, deterministic per name so the same scope always gets the
+// same color across reloads.
+const SCOPE_BADGE_PALETTE = [
+  "bg-violet-100 text-violet-700 border-violet-200",
+  "bg-teal-100 text-teal-700 border-teal-200",
+  "bg-amber-100 text-amber-700 border-amber-200",
+  "bg-sky-100 text-sky-700 border-sky-200",
+  "bg-pink-100 text-pink-700 border-pink-200",
+  "bg-lime-100 text-lime-700 border-lime-200",
+];
+function scopeBadgeClass(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return SCOPE_BADGE_PALETTE[hash % SCOPE_BADGE_PALETTE.length];
+}
+
 export default function ProjectsClient({
   projects,
   selectedStatuses,
   selectedTypes,
+  scopes = [],
+  selectedScopes = [],
+  scopeNamesByProject = {},
   searchTerm,
   page,
   totalPages,
@@ -38,6 +60,11 @@ export default function ProjectsClient({
   projects: Project[];
   selectedStatuses: string[];
   selectedTypes: string[];
+  // v3.0 — all optional/defaulted so this component still works exactly
+  // as before for any caller that predates patch_9.
+  scopes?: ProjectScope[];
+  selectedScopes?: string[];
+  scopeNamesByProject?: Record<string, string[]>;
   searchTerm: string;
   page: number;
   totalPages: number;
@@ -47,8 +74,10 @@ export default function ProjectsClient({
   const [search, setSearch] = useState(searchTerm);
   const [statuses, setStatuses] = useState<string[]>(selectedStatuses);
   const [types, setTypes] = useState<string[]>(selectedTypes);
+  const [scopeFilter, setScopeFilter] = useState<string[]>(selectedScopes);
   const [pending, startTransition] = useTransition();
   const [toDelete, setToDelete] = useState<Project | null>(null);
+  const useScopeFilter = scopes.length > 0;
 
   // Changing filters always resets to page 1 — a filtered result set
   // rarely has as many pages as the unfiltered one, and staying on e.g.
@@ -57,7 +86,12 @@ export default function ProjectsClient({
   // is entirely absent from the URL — so once the user has touched the
   // status filter at all (even to clear every chip), we always include an
   // explicit (possibly empty) `status` marker to opt out of that default.
-  function applyFilters(nextStatuses: string[], nextTypes: string[], nextSearch: string) {
+  function applyFilters(
+    nextStatuses: string[],
+    nextTypes: string[],
+    nextSearch: string,
+    nextScopes: string[] = scopeFilter
+  ) {
     const params = new URLSearchParams();
     if (nextStatuses.length > 0) {
       nextStatuses.forEach((s) => params.append("status", s));
@@ -65,6 +99,7 @@ export default function ProjectsClient({
       params.set("status", "");
     }
     nextTypes.forEach((t) => params.append("project_type", t));
+    nextScopes.forEach((s) => params.append("scope", s));
     if (nextSearch) params.set("search_term", nextSearch);
     router.push(`/projects?${params.toString()}`);
     // Next's client router cache can otherwise serve a stale RSC response
@@ -80,6 +115,7 @@ export default function ProjectsClient({
       params.set("status", "");
     }
     types.forEach((t) => params.append("project_type", t));
+    scopeFilter.forEach((s) => params.append("scope", s));
     if (search) params.set("search_term", search);
     params.set("page", String(nextPage));
     router.push(`/projects?${params.toString()}`);
@@ -98,6 +134,14 @@ export default function ProjectsClient({
     const next = types.includes(type) ? types.filter((t) => t !== type) : [...types, type];
     setTypes(next);
     applyFilters(statuses, next, search);
+  }
+
+  function toggleScopeFilter(name: string) {
+    const next = scopeFilter.includes(name)
+      ? scopeFilter.filter((s) => s !== name)
+      : [...scopeFilter, name];
+    setScopeFilter(next);
+    applyFilters(statuses, types, search, next);
   }
 
   // Live search: debounce keystrokes instead of waiting for a full submit,
@@ -186,7 +230,7 @@ export default function ProjectsClient({
           <button type="submit" className="btn-ghost inline-flex items-center gap-2 px-4 py-2 text-sm">
             <FaSearch className="h-3 w-3" /> Search
           </button>
-          {(search || statuses.length > 0 || types.length > 0) && (
+          {(search || statuses.length > 0 || types.length > 0 || scopeFilter.length > 0) && (
             <button
               type="button"
               onClick={() => {
@@ -194,6 +238,7 @@ export default function ProjectsClient({
                 setSearch("");
                 setStatuses([]);
                 setTypes([]);
+                setScopeFilter([]);
                 // Explicit empty `status` marker: "cleared", not "untouched"
                 // — otherwise the page would fall back to its active-only
                 // default instead of actually showing every status.
@@ -229,24 +274,49 @@ export default function ProjectsClient({
           </div>
         </div>
         <div className="pt-2 border-t border-gray-100">
-          <span className="text-xs text-muted font-medium mb-1.5 block">Filter by Category / Type:</span>
+          <span className="text-xs text-muted font-medium mb-1.5 block">
+            Filter by Category / Type:
+          </span>
           <div className="flex flex-wrap gap-2">
-            {PROJECT_TYPES.map((type) => {
-              const active = types.includes(type);
-              return (
-                <button
-                  key={type}
-                  onClick={() => toggleType(type)}
-                  className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                    active
-                      ? TYPE_COLORS[type]
-                      : "border-gray-200 text-muted hover:text-foreground bg-white"
-                  }`}
-                >
-                  {type}
-                </button>
-              );
-            })}
+            {/* v3.0: once scopes exist (supabase_patch_9), filter by the
+                real DB-driven category — Energy, BIM - Revit, BIM - CAD,
+                Marketing & BD, etc. — instead of the old flat project_type,
+                which otherwise hides Marketing & BD under "BIM and AutoCad".
+                Falls back to the original 2 project_type chips, byte-for-
+                byte, until that migration has run. */}
+            {useScopeFilter
+              ? scopes.map((s) => {
+                  const active = scopeFilter.includes(s.name);
+                  return (
+                    <button
+                      key={s.id}
+                      onClick={() => toggleScopeFilter(s.name)}
+                      className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                        active
+                          ? scopeBadgeClass(s.name)
+                          : "border-gray-200 text-muted hover:text-foreground bg-white"
+                      }`}
+                    >
+                      {s.name}
+                    </button>
+                  );
+                })
+              : PROJECT_TYPES.map((type) => {
+                  const active = types.includes(type);
+                  return (
+                    <button
+                      key={type}
+                      onClick={() => toggleType(type)}
+                      className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                        active
+                          ? TYPE_COLORS[type]
+                          : "border-gray-200 text-muted hover:text-foreground bg-white"
+                      }`}
+                    >
+                      {type}
+                    </button>
+                  );
+                })}
           </div>
         </div>
       </div>
@@ -278,13 +348,30 @@ export default function ProjectsClient({
                   <td className="px-4 py-3">{p.client_name}</td>
                   <td className="px-4 py-3">{p.name}</td>
                   <td className="px-4 py-3">
-                    <span
-                      className={`text-xs px-2 py-1 rounded-full border whitespace-nowrap ${
-                        TYPE_COLORS[p.project_type] ?? ""
-                      }`}
-                    >
-                      {p.project_type}
-                    </span>
+                    {/* v3.0: prefer the real scope name(s) once assigned —
+                        a legacy/unscoped project (pre-patch_9, or
+                        genuinely never given a scope) falls back to the
+                        old project_type label so nothing goes blank. */}
+                    {(scopeNamesByProject[p.id] ?? []).length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {scopeNamesByProject[p.id].map((name) => (
+                          <span
+                            key={name}
+                            className={`text-xs px-2 py-1 rounded-full border whitespace-nowrap ${scopeBadgeClass(name)}`}
+                          >
+                            {name}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span
+                        className={`text-xs px-2 py-1 rounded-full border whitespace-nowrap ${
+                          TYPE_COLORS[p.project_type] ?? ""
+                        }`}
+                      >
+                        {p.project_type}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <span

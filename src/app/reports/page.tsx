@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/session";
+import { getSession, isSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getAllUsers, getAllProjects, toProjectMap } from "@/lib/data";
 import { getDateInfoForMonth, todayYearMonth } from "@/lib/dateUtils";
@@ -28,7 +28,7 @@ export default async function ReportsPage({
 }) {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (session.role !== "admin") redirect("/dashboard");
+  if (!isSuperAdminOnly(session)) redirect("/dashboard");
 
   const resolvedSearchParams = await searchParams;
   const { year: defaultYear, month: defaultMonth } = todayYearMonth();

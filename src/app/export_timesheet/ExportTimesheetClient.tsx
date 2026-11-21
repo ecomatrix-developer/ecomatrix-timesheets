@@ -130,8 +130,8 @@ export default function ExportTimesheetClient({
                 <p className="text-xs text-muted">No clients found on any project yet.</p>
               ) : (
                 <>
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-xs text-muted">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <p className="text-xs text-muted min-w-0">
                       Pick one or more clients — each gets its own sheet in the same workbook.
                     </p>
                     <div className="flex items-center gap-2 shrink-0">

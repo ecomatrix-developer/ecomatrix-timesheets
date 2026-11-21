@@ -186,15 +186,34 @@ body {
   background-size: 1000px 100%;
 }
 
-.scrollbar-thin::-webkit-scrollbar {
-  height: 8px;
-  width: 8px;
+/* Scrolling stays fully functional (mouse wheel, touch, keyboard) in every
+   dropdown, panel and sidebar that uses either class — only the visible
+   track/thumb is hidden, since a bare scrollbar reads as unfinished UI. */
+.scrollbar-thin,
+.scrollbar-none {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* legacy Edge/IE */
 }
-.scrollbar-thin::-webkit-scrollbar-thumb {
+.scrollbar-thin::-webkit-scrollbar,
+.scrollbar-none::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/new Edge */
+}
+
+/* Opposite of the two above, by request (2026-11-21): the Timesheet grid
+   and Reports' tables are wide enough that users need a visible cue they
+   CAN scroll sideways — unlike a dropdown, where the scroll affordance is
+   already obvious. Thin, low-contrast, horizontal-only. */
+.scrollbar-x-thin {
+  scrollbar-width: thin; /* Firefox */
+}
+.scrollbar-x-thin::-webkit-scrollbar {
+  height: 8px;
+}
+.scrollbar-x-thin::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.15);
   border-radius: 999px;
 }
-.scrollbar-thin::-webkit-scrollbar-track {
+.scrollbar-x-thin::-webkit-scrollbar-track {
   background: transparent;
 }
 

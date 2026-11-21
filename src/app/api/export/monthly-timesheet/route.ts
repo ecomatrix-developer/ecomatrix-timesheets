@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/session";
+import { getSession, isSuperAdminOnly } from "@/lib/session";
 import { buildMonthlyTimesheetWorkbook } from "@/lib/excel/monthlyTimesheetWorkbook";
 import { MONTH_NAMES } from "@/lib/dateUtils";
 
@@ -11,7 +11,7 @@ function sanitizeFilenamePart(name: string): string {
 // to assemble by hand) for a given year/month straight from the database.
 export async function GET(req: NextRequest) {
   const session = await getSession();
-  if (!session || session.role !== "admin") {
+  if (!session || !isSuperAdminOnly(session)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   }
 

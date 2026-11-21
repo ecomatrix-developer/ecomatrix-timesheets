@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/session";
+import { getSession, isSuperAdminOnly } from "@/lib/session";
 import { buildOwnerReportData } from "@/lib/reportData";
 import { renderPdfInChildProcess } from "@/lib/pdf/renderInChildProcess";
 import { sendReportEmail } from "@/lib/mailer";
@@ -10,7 +10,7 @@ import { sendReportEmail } from "@/lib/mailer";
  */
 export async function POST() {
   const session = await getSession();
-  if (!session || session.role !== "admin") {
+  if (!session || !isSuperAdminOnly(session)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   }
 

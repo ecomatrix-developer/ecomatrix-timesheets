@@ -1,27 +1,35 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useState, useTransition } from "react";
 import { useFormStatus } from "react-dom";
 import Image from "next/image";
 import { motion } from "framer-motion";
-import { loginAction, type LoginState } from "@/app/(actions)/authActions";
+import { loginAction, requestPasswordResetAction, type LoginState } from "@/app/(actions)/authActions";
 import Modal from "@/components/Modal";
 
 const initialState: LoginState = {};
 
 /**
- * Mirrors v1's login.html "Forgot Password?" modal exactly: there is no
- * real backend reset flow (v1's app.py has no matching route either) —
- * submitting always just shows a message directing the user to contact
- * an admin/developer.
+ * 2026-11-21: now actually connected — submitting emails a Super Admin
+ * (reusing the same SMTP path Contact Us already uses) with the username
+ * requesting a reset, instead of the old fake modal that just showed a
+ * static message with no backend call at all. Still not self-service:
+ * there's no password stored anywhere recoverable (bcrypt is one-way), so
+ * a Super Admin resets it from Employees & Roles and relays the new
+ * password directly. The confirmation message is identical whether or not
+ * the username exists, so this can't be used to probe for valid ones.
  */
 function ForgotPasswordModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [submitted, setSubmitted] = useState(false);
   const [username, setUsername] = useState("");
+  const [pending, startTransition] = useTransition();
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setSubmitted(true);
+    startTransition(async () => {
+      await requestPasswordResetAction(username);
+      setSubmitted(true);
+    });
   }
 
   return (
@@ -38,8 +46,9 @@ function ForgotPasswordModal({ open, onClose }: { open: boolean; onClose: () => 
         Enter your username below to request a password reset.
       </p>
       {submitted && (
-        <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-4">
-          Please contact the developer or your admin to reset your password.
+        <div className="text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-4">
+          Request sent. Your admin has been notified and will reset your password and share the
+          new one with you directly.
         </div>
       )}
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
@@ -55,8 +64,8 @@ function ForgotPasswordModal({ open, onClose }: { open: boolean; onClose: () => 
             className="glass-input w-full px-3 py-2"
           />
         </div>
-        <button type="submit" className="btn-primary w-full py-2">
-          Send Reset Request
+        <button type="submit" disabled={pending} className="btn-primary w-full py-2">
+          {pending ? "Sending…" : "Send Reset Request"}
         </button>
       </form>
     </Modal>
@@ -89,8 +98,8 @@ export default function LoginForm({ timeoutNotice }: { timeoutNotice?: boolean }
       className="w-full max-w-sm"
     >
       <div className="flex flex-col items-center gap-2 mb-6 text-center">
-        <div className="relative w-64 h-16">
-          <Image src="/logo.png" alt="Eco Matrix Engineering" fill className="object-contain" priority sizes="256px" />
+        <div className="relative w-48 h-12 sm:w-64 sm:h-16">
+          <Image src="/logo.png" alt="Eco Matrix Engineering" fill className="object-contain" priority sizes="(min-width: 640px) 256px, 192px" />
         </div>
         <p className="text-sm text-muted">Sign in to continue</p>
       </div>

@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/session";
+import { getSession, isSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getAllProjects, getAllUsers } from "@/lib/data";
 import PageTransition from "@/components/PageTransition";
@@ -60,7 +60,7 @@ async function getAllTimesheetEntriesForInsights() {
 export default async function InsightsPage() {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (session.role !== "admin") redirect("/login");
+  if (!isSuperAdminOnly(session)) redirect("/login");
 
   const [projects, users, entries] = await Promise.all([
     getAllProjects(),

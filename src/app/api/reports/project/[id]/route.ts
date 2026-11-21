@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/session";
+import { getSession, isSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getAllUsers } from "@/lib/data";
 
@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
-  if (!session || session.role !== "admin") {
+  if (!session || !isSuperAdminOnly(session)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   }
 

@@ -3,9 +3,40 @@ import { getSession } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getDateInfoForMonth, todayYearMonth } from "@/lib/dateUtils";
 import { CATEGORIES_FOR_GRID } from "@/lib/constants";
-import type { Project, TimesheetEntry } from "@/lib/types";
+import { getTimesheetTaxonomy } from "@/lib/data";
+import { buildProjectTaskMap, buildProjectScopeNameMap } from "@/lib/taxonomy";
+import { filterSelectableProjects } from "@/lib/projectVisibility";
+import type { Project, ProjectScope, TimesheetEntry } from "@/lib/types";
 import PageTransition from "@/components/PageTransition";
 import TimesheetGrid, { type GridEntryValue } from "@/components/TimesheetGrid";
+
+// This is the single most-used page in the app — every employee opens it
+// daily. If supabase_patch_9_projects_and_taxonomy.sql hasn't been run
+// yet (or a project genuinely has no scope assigned), this must NOT
+// break the comment dropdown: an empty/undefined map here makes
+// CommentModal fall back to the original flat COMMENT_CATEGORIES list
+// automatically (see CommentModal.tsx's categoryOptions fallback).
+// Both maps come from ONE taxonomy fetch — no second query.
+async function getTaxonomyMapsSafely(): Promise<{
+  projectTaskMap: Record<string, string[]> | undefined;
+  projectScopeNames: Record<string, string[]> | undefined;
+  scopes: ProjectScope[];
+}> {
+  try {
+    const taxonomy = await getTimesheetTaxonomy();
+    return {
+      projectTaskMap: buildProjectTaskMap(taxonomy),
+      projectScopeNames: buildProjectScopeNameMap(taxonomy),
+      scopes: taxonomy.scopes,
+    };
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    if (code === "PGRST205" || code === "PGRST204") {
+      return { projectTaskMap: undefined, projectScopeNames: undefined, scopes: [] };
+    }
+    throw err;
+  }
+}
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +77,7 @@ export default async function TimesheetPage({
     { data: entries, error: entErr },
     { data: submitted, error: subErr },
     { data: yearEntries, error: yearErr },
+    { projectTaskMap, projectScopeNames, scopes },
   ] = await Promise.all([
     supabaseAdmin.from("projects").select("*").order("name"),
     supabaseAdmin
@@ -73,6 +105,7 @@ export default async function TimesheetPage({
       .gte("entry_date", yearStart)
       .lte("entry_date", yearEnd)
       .in("category", ["Special Vacation", "Special Vacation Banking"]),
+    getTaxonomyMapsSafely(),
   ]);
 
   if (projErr) throw projErr;
@@ -101,11 +134,19 @@ export default async function TimesheetPage({
     else if (e.category === "Special Vacation Banking") specialVacationBankedYear += hours;
   }
 
+  const projects = (allProjects ?? []) as Project[];
+  // v3.0 (supabase_patch_12): the FULL list still goes to `projects` so
+  // rows the employee already has hours against keep rendering their
+  // proper name/number even if narrowed out of visibility later — only
+  // the "add a new project" picker is scoped to what this session may add.
+  const selectableProjects = filterSelectableProjects(projects, session);
+
   return (
     <PageTransition>
       <TimesheetGrid
         key={`${year}-${month}`}
-        projects={(allProjects ?? []) as Project[]}
+        projects={projects}
+        selectableProjects={selectableProjects}
         categories={[...CATEGORIES_FOR_GRID]}
         dateInfo={dateInfo}
         entriesByDate={entriesByDate}
@@ -116,6 +157,9 @@ export default async function TimesheetPage({
         specialVacationHoursYear={specialVacationHoursYear}
         specialVacationBankedYear={specialVacationBankedYear}
         isAdminViewer={session.role === "admin"}
+        projectTaskMap={projectTaskMap}
+        projectScopeNames={projectScopeNames}
+        scopes={scopes}
       />
     </PageTransition>
   );

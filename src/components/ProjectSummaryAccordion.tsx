@@ -136,7 +136,7 @@ export default function ProjectSummaryAccordion({
 
   return (
     <div className="glass !p-0 overflow-hidden">
-      <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 border-b border-gray-100">
         <h6 className="font-semibold text-accent text-sm">Project Summary</h6>
         <div className="flex gap-2">
           <button onClick={expandAll} className="btn-ghost text-xs px-3 py-1.5 inline-flex items-center gap-1.5">
@@ -249,8 +249,8 @@ export default function ProjectSummaryAccordion({
                             </p>
                           ) : (
                             <>
-                              <div className="flex items-center justify-between mb-3">
-                                <div className="grid grid-cols-4 gap-4 flex-1">
+                              <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 flex-1 min-w-0">
                                   <div>
                                     <p className="text-xs text-muted">Total Hours</p>
                                     <p className="font-semibold">
@@ -334,7 +334,7 @@ function PivotedEmployeeGrid({
   const sortedEmployees = Object.keys(employeeData).sort();
 
   return (
-    <div className="overflow-x-auto scrollbar-thin">
+    <div className="overflow-x-auto scrollbar-x-thin">
       <table className="w-full text-xs border-collapse">
         <thead>
           <tr className="border-b border-gray-200">

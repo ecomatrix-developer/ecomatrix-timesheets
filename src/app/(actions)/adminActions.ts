@@ -1,6 +1,6 @@
 "use server";
 
-import { requireAdmin } from "@/lib/session";
+import { requireSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { revalidatePath } from "next/cache";
 
@@ -13,10 +13,11 @@ export interface DeleteOldEntriesResult {
  * Mirrors v1's /delete_old_entries: bulk-deletes an entire month's worth of
  * timesheet entries across ALL employees. v1 had no confirmation step before
  * this destructive action; v2 requires the client to show a confirm dialog
- * before calling this (see DeleteOldEntriesClient.tsx).
+ * before calling this (now the "Delete Old Entries" section at the bottom
+ * of /database_stats — merged there 2026-11-21, no longer a separate page).
  */
 export async function deleteOldEntriesAction(monthYear: string): Promise<DeleteOldEntriesResult> {
-  await requireAdmin();
+  await requireSuperAdminOnly();
 
   const match = /^(\d{4})-(\d{2})$/.exec(monthYear);
   if (!match) {
@@ -41,6 +42,7 @@ export async function deleteOldEntriesAction(monthYear: string): Promise<DeleteO
 
   revalidatePath("/timesheet");
   revalidatePath("/reports");
+  revalidatePath("/database_stats");
   return {
     success: true,
     message: `Successfully deleted ${count ?? 0} timesheet entries for ${monthYear}.`,

@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { getSession } from "@/lib/session";
+import { getSession, isSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getAllUsers } from "@/lib/data";
 import PageTransition from "@/components/PageTransition";
@@ -334,13 +334,13 @@ export default async function DashboardPage({
             >
               <FaPlus className="h-3 w-3" /> Add Timesheet
             </Link>
-            {session.role === "admin" && (
+            {isSuperAdminOnly(session) && (
               <>
                 <Link
-                  href="/create_employee"
+                  href="/manage_roles"
                   className="inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg text-white bg-emerald-600 hover:bg-emerald-700 transition-colors"
                 >
-                  <FaUserPlus className="h-3 w-3" /> Create Employee
+                  <FaUserPlus className="h-3 w-3" /> Employees &amp; Roles
                 </Link>
                 <Link
                   href="/database_stats"

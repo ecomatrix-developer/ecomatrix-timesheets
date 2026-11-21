@@ -3,6 +3,7 @@ import ExcelJS from "exceljs";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getAllProjects, getAllUsers, toProjectMap, toUserMap } from "@/lib/data";
 import { getDateInfoForMonth, MONTH_NAMES } from "@/lib/dateUtils";
+import { TASK_NAME_TO_BUCKET } from "@/lib/taxonomy";
 import type { Project, PublicUser } from "@/lib/types";
 
 /**
@@ -27,16 +28,24 @@ import type { Project, PublicUser } from "@/lib/types";
  * employee doing BIM-CAD work on an otherwise Energy-Modelling-typed job).
  *
  * The REAL signal is each entry's structured comment breakdown (see
- * CommentModal.tsx / COMMENT_CATEGORIES in lib/constants.ts) — confirmed
- * live: "Deer Lodge Centre" entries carry "BIM-CAD"/"BIM-REVIT" comment
- * categories directly, independent of the project's own (wrong) type.
- * So classification here is driven entirely by the comment category,
- * per-entry, regardless of project_type:
- *   - "BIM-CAD"                                           -> Cad
- *   - "BIM-REVIT"                                         -> Revit
- *   - "Geometry" / "Thermal Template" / "HVAC" /
- *     "Simulation & QA/QC" / "Reporting"                  -> Energy
- *   - "Other" (and any unrecognized/marketing category)   -> Other
+ * CommentModal.tsx, and as of v3.0 lib/taxonomy.ts's per-project task
+ * list rather than the old flat COMMENT_CATEGORIES in lib/constants.ts)
+ * — confirmed live: "Deer Lodge Centre" entries carry "BIM-CAD"/
+ * "BIM-REVIT" comment categories directly, independent of the project's
+ * own (wrong) type. So classification here is driven entirely by the
+ * comment category, per-entry, regardless of project_type, via the
+ * shared TASK_NAME_TO_BUCKET map (recognizes both the original flat
+ * names and the v3.0 per-scope task names that replaced them in the
+ * dropdown — see categoryKind below):
+ *   - "BIM-CAD" / "CAD drafting" / "CAD review" /
+ *     "CAD Coordination & meetings"                         -> Cad
+ *   - "BIM-REVIT" / "Revit modeling" / "Revit review" /
+ *     "Revit Coordination & meetings"                       -> Revit
+ *   - "Geometry" / "Thermal Template" / "Thermal setup" /
+ *     "HVAC" / "Simulation & QA/QC" / "Reporting" / "Review" /
+ *     "Coordination & meetings"                              -> Energy
+ *   - "Other", any Shop Drawings or Marketing & BD task, and
+ *     any unrecognized category                              -> Other
  *   - no category at all (blank comment, or a breakdown
  *     item with no category field)                        -> inferred from
  *     whichever of Energy/Cad/Revit that SAME project earned the most
@@ -103,8 +112,6 @@ export interface MonthlyAggregation {
   rows: AggregatedRow[];
 }
 
-const ENERGY_CATEGORIES = new Set(["Geometry", "Thermal Template", "HVAC", "Simulation & QA/QC", "Reporting"]);
-
 function parseCommentBreakdown(comment: string | null): CommentBreakdownRow[] | null {
   const s = (comment ?? "").trim();
   if (!s.startsWith("[")) return null;
@@ -116,14 +123,29 @@ function parseCommentBreakdown(comment: string | null): CommentBreakdownRow[] | 
   }
 }
 
-/** Classifies an explicit, present category string. "unknown" means the
+/**
+ * Classifies an explicit, present category string. "unknown" means the
  * category field was missing/blank — not a bucket on its own, resolved
- * later by inferring from the project's own dominant bucket that month. */
+ * later by inferring from the project's own dominant bucket that month.
+ *
+ * Reads from the shared TASK_NAME_TO_BUCKET map (src/lib/taxonomy.ts) so
+ * this stays in sync with the v3.0 billing-group/task taxonomy — it
+ * recognizes both the original flat category names (BIM-CAD, BIM-REVIT,
+ * Thermal Template, ...) AND the new per-scope task names (CAD drafting,
+ * Revit modeling, Thermal setup, ...) that replaced them in the
+ * timesheet comment dropdown, so old AND new entries bucket the same
+ * way. That map's "ShopDrawings" bucket (new scope, no equivalent in
+ * this export's Energy/Cad/Revit/Other structure) folds into "Other"
+ * here rather than adding a new section — Shop Drawings billing can get
+ * its own section later if that's wanted, this just keeps the export
+ * from breaking.
+ */
 function categoryKind(category: string | undefined): Bucket | "unknown" {
-  if (category === "BIM-CAD") return "Cad";
-  if (category === "BIM-REVIT") return "Revit";
-  if (category && ENERGY_CATEGORIES.has(category)) return "Energy";
   if (category === "Other") return "Other";
+  if (!category) return "unknown";
+  const mapped = TASK_NAME_TO_BUCKET[category];
+  if (mapped === "ShopDrawings") return "Other";
+  if (mapped) return mapped;
   return "unknown";
 }
 

@@ -22,6 +22,7 @@ import Select from "@/components/Select";
 import CompactDateRange from "./CompactDateRange";
 import { getPresetDateRange, getDateBuckets, type DateRange } from "@/lib/dateRange";
 import { SPECIAL_CATEGORIES } from "@/lib/constants";
+import { TASK_NAME_TO_BUCKET } from "@/lib/taxonomy";
 import type { Project } from "@/lib/types";
 
 const PALETTE = [
@@ -49,17 +50,13 @@ const PROJECT_TYPE_COLORS: Record<string, string> = {
   "BIM and AutoCad": "#14b8a6",
 };
 
-// Mirrors v1's energy_categories list exactly (app.py /insights route).
-const ENERGY_CATEGORIES = [
-  "Geometry",
-  "Thermal Template",
-  "HVAC",
-  "Simulation & QA/QC",
-  "Reporting",
-  "BIM-CAD",
-  "BIM-REVIT",
-  "Other",
-];
+// Mirrors v1's energy_categories list, extended for v3.0: every category
+// name in the shared TASK_NAME_TO_BUCKET map (both the original flat
+// names like "BIM-CAD" and the per-scope task names that replaced them,
+// e.g. "CAD drafting") plus "Other", so this chart keeps working for old
+// AND new timesheet entries without drifting out of sync with the
+// taxonomy elsewhere (see lib/taxonomy.ts).
+const ENERGY_CATEGORIES = [...Object.keys(TASK_NAME_TO_BUCKET), "Other"];
 
 interface RawEntry {
   project_id: string | null;

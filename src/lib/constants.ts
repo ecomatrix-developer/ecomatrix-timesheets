@@ -74,3 +74,19 @@ export const COMMENT_CATEGORIES = [
 // Keeping one shared constant means every list paginates consistently.
 export const PAGE_SIZE = 10;
 
+// Employee document portal category labels — keep in sync with the
+// DocumentCategory union in types.ts and the CHECK constraint in
+// supabase_patch_8_documents.sql.
+export const DOCUMENT_CATEGORY_LABELS: Record<string, string> = {
+  salary_slip: "Salary Slip",
+  offer_letter: "Offer Letter",
+  appointment_letter: "Appointment Letter",
+  confirmation_letter: "Confirmation Letter",
+  increment_letter: "Increment Letter",
+  nda: "NDA",
+  id_proof: "ID Proof",
+  address_proof: "Address Proof",
+  bank_document: "Bank Document",
+  other: "Other",
+};
+

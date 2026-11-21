@@ -45,6 +45,20 @@ export default function DateRangePicker({
   const [calendarMonth, setCalendarMonth] = useState(parseISO(initialFrom));
   const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
+  // Two full months side-by-side only fit a tablet/desktop-width popover —
+  // on a phone this used to force horizontal scrolling just to see the
+  // second month. Below the sm breakpoint it shows one month at a time
+  // instead, which is what the day picker is actually designed for there.
+  const [calendarMonths, setCalendarMonths] = useState(2);
+
+  useEffect(() => {
+    function updateMonths() {
+      setCalendarMonths(window.innerWidth < 640 ? 1 : 2);
+    }
+    updateMonths();
+    window.addEventListener("resize", updateMonths);
+    return () => window.removeEventListener("resize", updateMonths);
+  }, []);
 
   useEffect(() => {
     setPreset(initialPreset);
@@ -173,7 +187,7 @@ export default function DateRangePicker({
                 onSelect={handleCalendarSelect}
                 month={calendarMonth}
                 onMonthChange={setCalendarMonth}
-                numberOfMonths={2}
+                numberOfMonths={calendarMonths}
                 weekStartsOn={1}
                 showOutsideDays
               />

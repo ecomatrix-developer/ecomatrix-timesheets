@@ -38,52 +38,188 @@ export async function createProjectAction(formData: FormData) {
 }
 
 export interface NewProjectInput {
+  // v3.0: project_number is never user-typed when the taxonomy migration
+  // (supabase_patch_9) is live — left here only so a pre-migration
+  // client can still submit it exactly like before; the action ignores
+  // it whenever client_id/scope_ids are present (the v3.0 path).
   project_number: string;
   client_name: string;
   name: string;
   description: string;
   project_type: string;
   status: string;
+  // v3.0 fields — all optional, absent entirely on the pre-migration form.
+  client_id?: string;
+  client_project_number?: string;
+  scope_ids?: string[];
+  // v3.0 (supabase_patch_11) horizontal create form — the admin's edited
+  // value for the auto-generated number, if they changed it. Empty/absent
+  // means "use the next atomically-generated number" (the original
+  // behavior). Only meaningful alongside client_id.
+  eco_matrix_number_override?: string;
+  // Absent on any form that predates supabase_patch_11 — the insert below
+  // only includes the column when this is actually sent.
+  billable?: boolean;
+  // v3.0 (supabase_patch_12) — which UserType(s) may see this project on
+  // the timesheet. Undefined (not just an empty array) means "don't touch
+  // this column" — the create form only sends it when every user type is
+  // NOT checked, i.e. the admin actually narrowed the audience down; an
+  // empty/absent value here always means "everyone", matching the
+  // column's own NULL default.
+  visible_user_types?: string[];
 }
 
 /**
  * Mirrors v1's real create_project.html: "Create New Project(s)" — a
  * bulk-add form where an admin can stack multiple project rows (via an
  * "Add New" button) and submit them all in one request.
+ *
+ * v3.0: when a row carries client_id (meaning the create form detected
+ * supabase_patch_9 is live and rendered the new fields), the ECO Matrix
+ * number is generated server-side via generate_eco_matrix_number() —
+ * never taken from the client — and project_scope_links rows are written
+ * for its scope_ids. A row with no client_id falls back to the exact
+ * pre-v3.0 behavior (free-typed project_number, no scopes), so this
+ * keeps working unchanged until that migration has actually run.
  */
 export async function createProjectsBulkAction(
   inputs: NewProjectInput[]
 ): Promise<{ success: boolean; error?: string; count?: number }> {
-  await requireAdmin();
+  const session = await requireAdmin();
 
   if (!Array.isArray(inputs) || inputs.length === 0) {
     return { success: false, error: "No projects to create." };
   }
 
-  const rows = inputs.map((p) => ({
-    project_number: p.project_number?.trim() || null,
-    client_name: p.client_name?.trim() ?? "",
-    name: p.name?.trim() ?? "",
-    description: p.description?.trim() || null,
-    status: normalizeStatus(p.status),
-    project_type: normalizeProjectType(p.project_type),
-  }));
-
-  for (const r of rows) {
-    if (!r.client_name || !r.name) {
-      return { success: false, error: "Client Name and Project Name are required for every row." };
+  for (const p of inputs) {
+    if (!p.client_id && !p.client_name?.trim()) {
+      return { success: false, error: "Client is required for every row." };
+    }
+    if (!p.name?.trim()) {
+      return { success: false, error: "Project Name is required for every row." };
     }
   }
 
-  const { error } = await supabaseAdmin.from("projects").insert(rows);
-  if (error) return { success: false, error: error.message };
+  const createdIds: { id: string; scope_ids?: string[]; status: ProjectStatus }[] = [];
+
+  // A row that fails partway through this loop must not leave EARLIER
+  // rows from the same batch sitting in the DB while the admin is told
+  // the whole operation failed — that's exactly how "26-003" ended up
+  // permanently consumed-but-missing. Every early exit below goes through
+  // this so a reported failure genuinely means nothing was created.
+  async function rollbackAndFail(message: string) {
+    if (createdIds.length > 0) {
+      await supabaseAdmin.from("projects").delete().in("id", createdIds.map((c) => c.id));
+    }
+    return { success: false, error: message };
+  }
+
+  for (const p of inputs) {
+    let clientName = p.client_name?.trim() ?? "";
+    let ecoMatrixNumber: string | null = null;
+    let projectNumber = p.project_number?.trim() || null;
+
+    if (p.client_id) {
+      const { data: client, error: clientErr } = await supabaseAdmin
+        .from("clients")
+        .select("name")
+        .eq("id", p.client_id)
+        .maybeSingle();
+      if (clientErr) return rollbackAndFail(clientErr.message);
+      if (!client) return rollbackAndFail("Selected client not found.");
+      clientName = client.name;
+
+      // v3.0 (supabase_patch_11): the horizontal create form shows the
+      // next number up front and lets the admin edit it before saving —
+      // an explicit override skips the atomic generator entirely instead
+      // of generating a number and then throwing it away.
+      const override = p.eco_matrix_number_override?.trim();
+      if (override) {
+        ecoMatrixNumber = override;
+      } else {
+        const { data: generated, error: genErr } = await supabaseAdmin.rpc(
+          "generate_eco_matrix_number"
+        );
+        if (genErr) return rollbackAndFail(genErr.message);
+        ecoMatrixNumber = generated as string;
+      }
+      projectNumber = ecoMatrixNumber; // keep every existing project_number-based
+      // query/display/export working unchanged for new projects too.
+    }
+
+    const status = normalizeStatus(p.status);
+    const { data: inserted, error } = await supabaseAdmin
+      .from("projects")
+      .insert({
+        project_number: projectNumber,
+        client_name: clientName,
+        name: p.name.trim(),
+        description: p.description?.trim() || null,
+        status,
+        project_type: normalizeProjectType(p.project_type),
+        ...(p.client_id ? { client_id: p.client_id, eco_matrix_number: ecoMatrixNumber } : {}),
+        ...(p.client_project_number?.trim()
+          ? { client_project_number: p.client_project_number.trim() }
+          : {}),
+        ...(p.billable !== undefined ? { billable: p.billable } : {}),
+        ...(p.visible_user_types !== undefined
+          ? { visible_user_types: p.visible_user_types.length > 0 ? p.visible_user_types : null }
+          : {}),
+      })
+      .select("id")
+      .single();
+    if (error) {
+      // 23505 = unique_violation — almost always the partial unique index
+      // on eco_matrix_number, hit when an admin manually typed a number
+      // that's already in use. Friendlier than the raw Postgres message.
+      if (error.code === "23505") {
+        return rollbackAndFail(
+          `Project number "${ecoMatrixNumber ?? projectNumber}" is already in use — pick a different one.`
+        );
+      }
+      return rollbackAndFail(error.message);
+    }
+
+    createdIds.push({ id: inserted.id, scope_ids: p.scope_ids, status });
+  }
+
+  const scopeLinkRows = createdIds.flatMap(({ id, scope_ids }) =>
+    (scope_ids ?? []).map((scope_id) => ({ project_id: id, scope_id }))
+  );
+  if (scopeLinkRows.length > 0) {
+    const { error: linkErr } = await supabaseAdmin.from("project_scope_links").insert(scopeLinkRows);
+    if (linkErr) return { success: false, error: linkErr.message };
+  }
+
+  // Best-effort audit trail — a failure here shouldn't undo the projects
+  // that were already successfully created above.
+  await supabaseAdmin.from("project_status_audit").insert(
+    createdIds.map(({ id, status }) => ({
+      project_id: id,
+      old_status: null,
+      new_status: status,
+      changed_by: session.userId,
+    }))
+  );
 
   revalidatePath("/projects");
-  return { success: true, count: rows.length };
+  return { success: true, count: createdIds.length };
 }
 
 export async function updateProjectAction(projectId: string, formData: FormData) {
-  await requireAdmin();
+  const session = await requireAdmin();
+
+  const { data: existing, error: existingErr } = await supabaseAdmin
+    .from("projects")
+    .select("status")
+    .eq("id", projectId)
+    .maybeSingle();
+  if (existingErr) throw existingErr;
+
+  const status = normalizeStatus(formData.get("status"));
+  const clientId = String(formData.get("client_id") ?? "").trim() || null;
+  const clientProjectNumber = String(formData.get("client_project_number") ?? "").trim() || null;
+  const scopeIdsRaw = formData.getAll("scope_ids");
 
   const { error } = await supabaseAdmin
     .from("projects")
@@ -92,11 +228,35 @@ export async function updateProjectAction(projectId: string, formData: FormData)
       client_name: String(formData.get("client_name") ?? ""),
       name: String(formData.get("name") ?? ""),
       description: String(formData.get("description") ?? "") || null,
-      status: normalizeStatus(formData.get("status")),
+      status,
       project_type: normalizeProjectType(formData.get("project_type")),
+      // v3.0 fields — only present on the form once supabase_patch_9 is
+      // live; absent on the pre-migration form, so these stay untouched
+      // (undefined keys aren't sent in a Supabase update) until then.
+      ...(clientId ? { client_id: clientId } : {}),
+      ...(clientProjectNumber !== null ? { client_project_number: clientProjectNumber } : {}),
     })
     .eq("id", projectId);
   if (error) throw error;
+
+  if (scopeIdsRaw.length > 0 || formData.has("scopes_submitted")) {
+    await supabaseAdmin.from("project_scope_links").delete().eq("project_id", projectId);
+    const scopeIds = scopeIdsRaw.map(String).filter(Boolean);
+    if (scopeIds.length > 0) {
+      await supabaseAdmin
+        .from("project_scope_links")
+        .insert(scopeIds.map((scope_id) => ({ project_id: projectId, scope_id })));
+    }
+  }
+
+  if (existing && existing.status !== status) {
+    await supabaseAdmin.from("project_status_audit").insert({
+      project_id: projectId,
+      old_status: existing.status,
+      new_status: status,
+      changed_by: session.userId,
+    });
+  }
 
   revalidatePath("/projects");
   redirect("/projects");

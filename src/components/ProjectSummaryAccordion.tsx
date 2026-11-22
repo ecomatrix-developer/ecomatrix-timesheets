@@ -325,7 +325,13 @@ function PivotedEmployeeGrid({
 
   for (const e of entries) {
     employeeData[e.employee] ??= { hoursByDate: {}, total: 0 };
-    employeeData[e.employee].hoursByDate[e.date] = e.hours;
+    // Sum, not overwrite: the API returns one row per raw timesheet_entries
+    // record, not pre-grouped by day, so if an employee ever has two rows
+    // for the same project on the same date, assigning here would
+    // silently drop one of them from the per-day cell while the Total
+    // column (which does sum) kept counting it — a real discrepancy
+    // between the visible per-day cells and the row's own Total.
+    employeeData[e.employee].hoursByDate[e.date] = (employeeData[e.employee].hoursByDate[e.date] ?? 0) + e.hours;
     employeeData[e.employee].total += e.hours;
     dateSet.add(e.date);
   }
@@ -353,7 +359,11 @@ function PivotedEmployeeGrid({
               <td className="py-1.5 pr-2 font-medium whitespace-nowrap">{emp}</td>
               {sortedDates.map((d) => (
                 <td key={d} className="py-1.5 px-1.5 text-center">
-                  {employeeData[emp].hoursByDate[d]?.toFixed(2) ?? ""}
+                  {/* Abeer, 2026-11-23: a 0.00 cell (a day logged with no
+                      hours, just a comment) reads as confusing noise in
+                      this grid — blank means "nothing", same as an
+                      untouched cell. */}
+                  {employeeData[emp].hoursByDate[d] ? employeeData[emp].hoursByDate[d].toFixed(2) : ""}
                 </td>
               ))}
               <td className="py-1.5 pl-2 text-right font-semibold">

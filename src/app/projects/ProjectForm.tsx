@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { FaSave, FaLock } from "react-icons/fa";
-import { PROJECT_STATUSES } from "@/lib/constants";
+import { PROJECT_STATUSES, USER_TYPE_OPTIONS, ALL_USER_TYPES } from "@/lib/constants";
 import type { Project, Client, ProjectScope } from "@/lib/types";
 import Select from "@/components/Select";
 import BackLink from "@/components/BackLink";
@@ -14,12 +14,16 @@ export default function ProjectForm({
   clients = [],
   scopes = [],
   selectedScopeIds = [],
+  billableSupported = false,
+  visibilitySupported = false,
 }: {
   project?: Project;
   action: (formData: FormData) => void;
   clients?: Client[];
   scopes?: ProjectScope[];
   selectedScopeIds?: string[];
+  billableSupported?: boolean;
+  visibilitySupported?: boolean;
 }) {
   const v3 = clients.length > 0;
   // Select renders its own button/panel, not a native <select>, so its
@@ -29,9 +33,28 @@ export default function ProjectForm({
   const [status, setStatus] = useState<string>(project?.status ?? "active");
   const [clientId, setClientId] = useState<string>(project?.client_id ?? "");
   const [scopeIds, setScopeIds] = useState<string[]>(selectedScopeIds);
+  // v3.0 (supabase_patch_11/12) — same fields Create Project lets you set,
+  // now editable too (previously Billing/Visible To could only ever be set
+  // once, at creation, with no way back in). Undefined project.billable
+  // (pre-patch_11 projects) defaults to billable, matching the DB column's
+  // own default.
+  const [billable, setBillable] = useState<boolean>(project?.billable ?? true);
+  const [visibleTypes, setVisibleTypes] = useState<string[]>(
+    project?.visible_user_types && project.visible_user_types.length > 0
+      ? project.visible_user_types
+      : [...ALL_USER_TYPES]
+  );
 
   function toggleScope(id: string) {
     setScopeIds((prev) => (prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]));
+  }
+
+  function toggleVisibleType(type: string) {
+    setVisibleTypes((prev) => {
+      const has = prev.includes(type);
+      if (has && prev.length === 1) return prev; // always keep at least one
+      return has ? prev.filter((t) => t !== type) : [...prev, type];
+    });
   }
 
   // v3.0 projects already carry a system-generated number; legacy
@@ -159,6 +182,55 @@ export default function ProjectForm({
         <input type="hidden" name="status" value={status} />
         <Select value={status} onChange={setStatus} options={PROJECT_STATUSES.map((s) => ({ value: s, label: s }))} />
       </div>
+
+      {billableSupported && (
+        <div>
+          <label className="text-sm text-muted mb-1 block">Billing</label>
+          <input type="hidden" name="billable_submitted" value="1" />
+          <input type="hidden" name="billable" value={billable ? "true" : "false"} />
+          <Select
+            value={billable ? "true" : "false"}
+            onChange={(value) => setBillable(value === "true")}
+            options={[
+              { value: "true", label: "Billable" },
+              { value: "false", label: "Non-billable" },
+            ]}
+          />
+        </div>
+      )}
+
+      {visibilitySupported && (
+        <div>
+          <label className="text-sm text-muted mb-1 block">
+            Visible To{" "}
+            {visibleTypes.length === ALL_USER_TYPES.length && (
+              <span className="font-normal text-muted">(everyone — default)</span>
+            )}
+          </label>
+          <input type="hidden" name="visibility_submitted" value="1" />
+          {visibleTypes.length < ALL_USER_TYPES.length &&
+            visibleTypes.map((t) => <input key={t} type="hidden" name="visible_user_types" value={t} />)}
+          <div className="flex flex-wrap gap-2">
+            {USER_TYPE_OPTIONS.map((o) => {
+              const checked = visibleTypes.includes(o.value);
+              return (
+                <button
+                  key={o.value}
+                  type="button"
+                  onClick={() => toggleVisibleType(o.value)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                    checked
+                      ? "bg-accent text-white border-accent"
+                      : "bg-white text-muted border-gray-200 hover:border-gray-300"
+                  }`}
+                >
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {v3 && scopes.length > 0 && (
         <div>

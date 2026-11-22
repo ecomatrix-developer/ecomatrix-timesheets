@@ -82,7 +82,13 @@ export default async function TimesheetPage({
     supabaseAdmin.from("projects").select("*").order("name"),
     supabaseAdmin
       .from("timesheet_entries")
-      .select("*")
+      // Only these 4 columns are actually read below (project_id/category
+      // for the row key, entry_date to bucket by day, hours/comment for
+      // the cell value) — trimmed from select("*") since this is the
+      // single highest-traffic query in the app (every employee, every
+      // page load) and mongo_id/employee_id/created_at/updated_at were
+      // all dead weight over the wire.
+      .select("project_id, category, entry_date, hours, comment")
       .eq("employee_id", session.userId)
       .gte("entry_date", firstDate)
       .lte("entry_date", lastDate),
@@ -115,7 +121,10 @@ export default async function TimesheetPage({
 
   // Build entries keyed by date -> rowKey -> {hours, comment}
   const entriesByDate: Record<string, Record<string, GridEntryValue>> = {};
-  for (const e of (entries ?? []) as TimesheetEntry[]) {
+  for (const e of (entries ?? []) as Pick<
+    TimesheetEntry,
+    "project_id" | "category" | "entry_date" | "hours" | "comment"
+  >[]) {
     const rowKey = e.project_id ? `p:${e.project_id}` : `c:${e.category}`;
     entriesByDate[e.entry_date] ??= {};
     entriesByDate[e.entry_date][rowKey] = {

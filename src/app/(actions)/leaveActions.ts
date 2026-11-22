@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireSession, isAdminOrAbove } from "@/lib/session";
+import { requireSession, isSuperAdminOnly } from "@/lib/session";
 import { getLeaveRequestById } from "@/lib/data";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import type { LeaveType } from "@/lib/types";
@@ -61,9 +61,10 @@ export async function createLeaveRequestAction(
 }
 
 /**
- * Admin or Super Admin only (fallback-aware — same tier as "approve/reopen
- * timesheets" per the brief). Approves or rejects any employee's request,
- * org-wide — Admin is a flat tier, not scoped to a subset of people.
+ * Super Admin only (fallback-aware) — Abeer, 2026-11-22: "make sure only
+ * superadmins are able to see that, normal admins cant they can only
+ * request." A plain Admin can still submit their own leave requests via
+ * createLeaveRequestAction above, just never decide anyone else's.
  */
 export async function decideLeaveRequestAction(
   requestId: string,
@@ -71,8 +72,8 @@ export async function decideLeaveRequestAction(
   note?: string
 ): Promise<{ success: boolean; message: string }> {
   const session = await requireSession();
-  if (!isAdminOrAbove(session)) {
-    return { success: false, message: "You don't have permission to approve leave." };
+  if (!isSuperAdminOnly(session)) {
+    return { success: false, message: "Only a Super Admin can approve or reject leave requests." };
   }
 
   const request = await getLeaveRequestById(requestId);
@@ -94,4 +95,46 @@ export async function decideLeaveRequestAction(
 
   revalidatePath("/leave");
   return { success: true, message: `Request ${decision}.` };
+}
+
+/**
+ * Full two-way thread (supabase_patch_18) — Abeer, 2026-11-22: "if user
+ * want he can reply there as well to the same thread so make that enable
+ * for leaves as well as contact us." Either the request's own submitter —
+ * an Admin requesting leave is just another requester here, same as an
+ * Employee/Intern/Consultant/etc (2026-11-22: "admins also will request or
+ * send contact like employees and others") — or a Super Admin, can keep
+ * adding messages, independent of the approve/reject decision. Only the
+ * DECIDE side (approve/reject, and reading/replying on someone ELSE's
+ * request) stays Super-Admin-only. In-app only, never emailed.
+ */
+export async function addLeaveRequestMessageAction(
+  requestId: string,
+  message: string
+): Promise<{ success: boolean; message: string }> {
+  const session = await requireSession();
+  const trimmed = message.trim();
+  if (!trimmed) return { success: false, message: "Write a message first." };
+
+  const request = await getLeaveRequestById(requestId);
+  if (!request) return { success: false, message: "Request not found." };
+
+  if (!isSuperAdminOnly(session) && request.employee_id !== session.userId) {
+    return { success: false, message: "You don't have permission to do that." };
+  }
+
+  const { error } = await supabaseAdmin.from("leave_request_messages").insert({
+    request_id: requestId,
+    sender_id: session.userId,
+    message: trimmed,
+  });
+  if (error) {
+    if (error.code === "PGRST205") {
+      return { success: false, message: "Replies haven't been set up yet. Contact your developer, then try again." };
+    }
+    return { success: false, message: error.message };
+  }
+
+  revalidatePath("/leave");
+  return { success: true, message: "Message sent." };
 }

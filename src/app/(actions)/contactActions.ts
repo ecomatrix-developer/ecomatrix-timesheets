@@ -1,7 +1,6 @@
 "use server";
 
-import { requireSession, isAdminOrAbove } from "@/lib/session";
-import { sendPlainEmail } from "@/lib/mailer";
+import { requireSession, isSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export interface ContactFormState {
@@ -11,11 +10,12 @@ export interface ContactFormState {
 
 /**
  * Replaces v1's external link to ecomatrix.io/contact-us. Stores the
- * submission FIRST (supabase_patch_15) — so a submission is never lost
- * even if email happens to be down or misconfigured — then best-effort
- * emails OWNER_EMAIL/ADMIN_EMAIL as before. Super Admin can see every
- * submission (read or not) on /contact_submissions, and new ones surface
- * in the notification bell for Admin/Super Admin.
+ * submission (supabase_patch_15) — in-app only, never emailed (2026-11-22:
+ * "remove this email from there which is sending to anup and erv email
+ * when someone fills contact us forms, not need to send real email
+ * there"). Super Admin sees every submission (read or not) on
+ * /contact_submissions, and new ones surface in the notification bell
+ * (2026-11-22: "remove inbox from admins" — Super-Admin-only now).
  */
 export async function submitContactFormAction(
   _prevState: ContactFormState,
@@ -47,31 +47,19 @@ export async function submitContactFormAction(
     return { error: insertErr.message };
   }
 
-  // Best-effort only from here — the submission is already safely stored
-  // and visible to Super Admin regardless of whether this email goes out.
-  const recipients = [process.env.OWNER_EMAIL, process.env.ADMIN_EMAIL].filter(
-    (v): v is string => !!v
-  );
-  if (recipients.length > 0) {
-    const body = [
-      `From: ${session.name} (${session.username})`,
-      `Role: ${session.role}`,
-      "",
-      message,
-    ].join("\n");
-    await sendPlainEmail(recipients, `[Timesheet App] ${subject}`, body).catch(() => {});
-  }
-
   return { success: true };
 }
 
-/** Admin-or-above — marks one inbox item read/unread from /contact_submissions. */
+/**
+ * Super Admin only (2026-11-22: "remove inbox from admins") — marks one
+ * inbox item read/unread from /contact_submissions.
+ */
 export async function markContactSubmissionReadAction(
   id: string,
   read: boolean
 ): Promise<{ success: boolean; error?: string }> {
   const session = await requireSession();
-  if (!isAdminOrAbove(session)) {
+  if (!isSuperAdminOnly(session)) {
     return { success: false, error: "You don't have permission to do that." };
   }
 
@@ -80,6 +68,66 @@ export async function markContactSubmissionReadAction(
     .update(read ? { read_at: new Date().toISOString(), read_by: session.userId } : { read_at: null, read_by: null })
     .eq("id", id);
   if (error) return { success: false, error: error.message };
+
+  return { success: true };
+}
+
+/**
+ * Full two-way thread (supabase_patch_18) — Abeer, 2026-11-22: "if user
+ * want he can reply there as well to the same thread so make that enable
+ * for leaves as well as contact us." Either the submission's own sender —
+ * an Admin submitting their own Contact Us message is just another
+ * sender here, same as an Employee/Intern/Consultant/etc — or a Super
+ * Admin, can keep adding messages to the same conversation. Only the
+ * ADMIN-SIDE capability (replying to/managing someone ELSE's submission)
+ * is Super-Admin-only (2026-11-22: "remove inbox from admins"). In-app
+ * only, never emailed.
+ *
+ * When the admin side posts, the item is marked read (they're clearly
+ * engaged). When the SENDER posts a follow-up, it's marked unread again
+ * so it resurfaces for Super Admin instead of silently sitting answered.
+ */
+export async function addContactSubmissionMessageAction(
+  submissionId: string,
+  message: string
+): Promise<{ success: boolean; error?: string }> {
+  const session = await requireSession();
+  const trimmed = message.trim();
+  if (!trimmed) return { success: false, error: "Write a message first." };
+
+  const { data: submission, error: fetchErr } = await supabaseAdmin
+    .from("contact_submissions")
+    .select("user_id")
+    .eq("id", submissionId)
+    .maybeSingle();
+  if (fetchErr) return { success: false, error: fetchErr.message };
+  if (!submission) return { success: false, error: "Submission not found." };
+
+  const isAdminSide = isSuperAdminOnly(session);
+  if (!isAdminSide && submission.user_id !== session.userId) {
+    return { success: false, error: "You don't have permission to do that." };
+  }
+
+  const { error: insertErr } = await supabaseAdmin.from("contact_submission_messages").insert({
+    submission_id: submissionId,
+    sender_id: session.userId,
+    message: trimmed,
+  });
+  if (insertErr) {
+    if (insertErr.code === "PGRST205") {
+      return { success: false, error: "Replies haven't been set up yet. Contact your developer, then try again." };
+    }
+    return { success: false, error: insertErr.message };
+  }
+
+  await supabaseAdmin
+    .from("contact_submissions")
+    .update(
+      isAdminSide
+        ? { read_at: new Date().toISOString(), read_by: session.userId }
+        : { read_at: null, read_by: null }
+    )
+    .eq("id", submissionId);
 
   return { success: true };
 }

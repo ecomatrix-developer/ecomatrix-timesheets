@@ -108,7 +108,7 @@ export default function Select({
             : "border-gray-200 hover:border-gray-300"
         } ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
       >
-        <span className={`truncate ${selected ? "text-foreground" : "text-gray-400 font-normal"}`}>
+        <span className={`break-words ${selected ? "text-foreground" : "text-gray-400 font-normal"}`}>
           {selected ? selected.label : placeholder}
         </span>
         <FaChevronDown
@@ -153,7 +153,7 @@ export default function Select({
                           : "text-foreground hover:bg-gray-50"
                       }`}
                     >
-                      <span className="truncate">{opt.label}</span>
+                      <span className="break-words">{opt.label}</span>
                       {isSelected && <FaCheck className="h-3 w-3 shrink-0" />}
                     </button>
                   );

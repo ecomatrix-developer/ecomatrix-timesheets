@@ -7,8 +7,10 @@ import { getDocumentDownloadUrlAction } from "@/app/(actions)/documentActions";
 import { toast } from "@/lib/toast";
 import { FaFileAlt, FaDownload, FaLock } from "react-icons/fa";
 
+// Fixed "en-US" locale, not the runtime's default — avoids a hydration
+// mismatch between the server's and browser's default locale.
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
+  return new Date(iso).toLocaleDateString("en-US", {
     year: "numeric",
     month: "short",
     day: "numeric",

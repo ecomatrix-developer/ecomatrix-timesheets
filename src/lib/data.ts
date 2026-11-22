@@ -1,6 +1,6 @@
 import "server-only";
 import { supabaseAdmin } from "./supabaseAdmin";
-import type { BillingGroup, Client, ContactSubmission, EmployeeDocument, LeaveRequest, Project, ProjectScope, PublicUser, Task, User } from "./types";
+import type { BillingGroup, Client, ContactSubmission, ContactSubmissionMessage, EmployeeDocument, LeaveRequest, LeaveRequestMessage, Project, ProjectScope, PublicUser, Task, User } from "./types";
 
 export async function getAllUsers(): Promise<PublicUser[]> {
   const { data, error } = await supabaseAdmin
@@ -147,19 +147,33 @@ export async function getPendingLeaveRequestsCount(): Promise<number> {
   return count ?? 0;
 }
 
-// v3.0 (supabase_patch_15) — Contact Us submissions + "Forgot Password?"
-// requests, newest first. Super-Admin-only inbox page.
-export async function getContactSubmissions(
-  limit: number,
-  offset: number
-): Promise<{ data: ContactSubmission[]; count: number }> {
-  const { data, error, count } = await supabaseAdmin
+// v3.0 (supabase_patch_15) — every Contact Us submission + "Forgot
+// Password?" request ever made, newest first — no pagination, no date
+// bound. Abeer, 2026-11-22: "it should show all the past msg as well...
+// irrespective of date filter" — this inbox is a small, internal-only
+// record (not a public-facing high-volume table), so one unbounded fetch
+// is simpler and safer than paginating away history an admin needs to
+// search back through. Admin/Super Admin inbox page.
+export async function getAllContactSubmissions(): Promise<ContactSubmission[]> {
+  const { data, error } = await supabaseAdmin
     .from("contact_submissions")
-    .select("*", { count: "exact" })
-    .order("created_at", { ascending: false })
-    .range(offset, offset + limit - 1);
+    .select("*")
+    .order("created_at", { ascending: false });
   if (error) throw error;
-  return { data: (data ?? []) as ContactSubmission[], count: count ?? 0 };
+  return (data ?? []) as ContactSubmission[];
+}
+
+// v3.0 (supabase_patch_16) — one employee's own submissions + whatever
+// reply an Admin/Super Admin has left, newest first. Powers the "Your
+// past messages" list under the Contact Us form.
+export async function getContactSubmissionsForUser(userId: string): Promise<ContactSubmission[]> {
+  const { data, error } = await supabaseAdmin
+    .from("contact_submissions")
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as ContactSubmission[];
 }
 
 export async function getUnreadContactSubmissionsCount(): Promise<number> {
@@ -169,6 +183,72 @@ export async function getUnreadContactSubmissionsCount(): Promise<number> {
     .is("read_at", null);
   if (error) throw error;
   return count ?? 0;
+}
+
+interface RawThreadMessage {
+  id: string;
+  sender_id: string;
+  message: string;
+  created_at: string;
+  sender: { name: string } | null;
+}
+
+// v3.0 (supabase_patch_18) — every message in every Contact Us thread,
+// grouped by submission_id. Admin/Super Admin Inbox view (sees every
+// thread); pass submissionIds to scope it to one employee's own threads
+// instead (the Contact Us page).
+export async function getContactSubmissionMessages(
+  submissionIds?: string[]
+): Promise<Record<string, ContactSubmissionMessage[]>> {
+  if (submissionIds && submissionIds.length === 0) return {};
+  let query = supabaseAdmin
+    .from("contact_submission_messages")
+    .select("id, submission_id, sender_id, message, created_at, sender:users!contact_submission_messages_sender_id_fkey(name)")
+    .order("created_at", { ascending: true });
+  if (submissionIds) query = query.in("submission_id", submissionIds);
+  const { data, error } = await query;
+  if (error) throw error;
+  const result: Record<string, ContactSubmissionMessage[]> = {};
+  for (const row of (data ?? []) as unknown as (RawThreadMessage & { submission_id: string })[]) {
+    (result[row.submission_id] ??= []).push({
+      id: row.id,
+      submission_id: row.submission_id,
+      sender_id: row.sender_id,
+      sender_name: row.sender?.name ?? "Unknown",
+      message: row.message,
+      created_at: row.created_at,
+    });
+  }
+  return result;
+}
+
+// v3.0 (supabase_patch_18) — same thread model as above, for leave
+// requests: every message in every thread, grouped by request_id. Super
+// Admin history view (sees every thread); pass requestIds to scope it to
+// one employee's own request threads instead ("My Requests").
+export async function getLeaveRequestMessages(
+  requestIds?: string[]
+): Promise<Record<string, LeaveRequestMessage[]>> {
+  if (requestIds && requestIds.length === 0) return {};
+  let query = supabaseAdmin
+    .from("leave_request_messages")
+    .select("id, request_id, sender_id, message, created_at, sender:users!leave_request_messages_sender_id_fkey(name)")
+    .order("created_at", { ascending: true });
+  if (requestIds) query = query.in("request_id", requestIds);
+  const { data, error } = await query;
+  if (error) throw error;
+  const result: Record<string, LeaveRequestMessage[]> = {};
+  for (const row of (data ?? []) as unknown as (RawThreadMessage & { request_id: string })[]) {
+    (result[row.request_id] ??= []).push({
+      id: row.id,
+      request_id: row.request_id,
+      sender_id: row.sender_id,
+      sender_name: row.sender?.name ?? "Unknown",
+      message: row.message,
+      created_at: row.created_at,
+    });
+  }
+  return result;
 }
 
 export async function getAllProjects(): Promise<Project[]> {

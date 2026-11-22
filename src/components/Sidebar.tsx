@@ -77,29 +77,28 @@ const superAdminLinksV3: { href: string; label: string; Icon: IconType }[] = [
 // branch below) since access_level hasn't been assigned to anyone yet —
 // superAdminLinks/superAdminLinksV3 above are untouched and still match
 // the brief exactly, so a real Super Admin gets the full set back the
-// moment patch_7b runs and assigns them that access level.
+// moment patch_7b runs and assigns them that access level. No Inbox here
+// (2026-11-22: "remove inbox from admins") — Super-Admin-only now.
 const adminLinksPreMigration: { href: string; label: string; Icon: IconType }[] = [
   { href: "/dashboard", label: "Dashboard", Icon: FaTachometerAlt },
   { href: "/timesheet", label: "Timesheet", Icon: FaClock },
   { href: "/projects", label: "Projects", Icon: FaProjectDiagram },
   { href: "/leave", label: "Leave", Icon: FaCalendarAlt },
-  { href: "/contact_submissions", label: "Inbox", Icon: FaInbox },
   { href: "/reports", label: "Reports", Icon: FaChartBar },
 ];
 
 // v3.0 Admin (flat tier, no team scoping): everything a User gets, plus
 // project creation, org-wide — but NOT reopening timesheets (moved to
-// Super-Admin-only, 2026-11-21) and NOT the other Super-Admin-only
-// screens (create employee, database stats, reports, insights, export,
-// delete old entries) and NOT other people's documents (only Super Admin
-// and the document's own employee can ever see those). Inbox IS included —
-// Admin-or-above, matching the notification bell and Leave approvals.
+// Super-Admin-only, 2026-11-21), NOT Inbox (moved to Super-Admin-only,
+// 2026-11-22: "remove inbox from admins"), and NOT the other
+// Super-Admin-only screens (create employee, database stats, reports,
+// insights, export, delete old entries) and NOT other people's documents
+// (only Super Admin and the document's own employee can ever see those).
 const adminLinksV3: { href: string; label: string; Icon: IconType }[] = [
   { href: "/dashboard", label: "Dashboard", Icon: FaTachometerAlt },
   { href: "/timesheet", label: "Timesheet", Icon: FaClock },
   { href: "/projects", label: "Projects", Icon: FaProjectDiagram },
   { href: "/leave", label: "Leave", Icon: FaCalendarAlt },
-  { href: "/contact_submissions", label: "Inbox", Icon: FaInbox },
   { href: "/my_documents", label: "My Documents", Icon: FaFileAlt },
 ];
 
@@ -157,11 +156,13 @@ export default function Sidebar({
     ? session.accessLevel === "super_admin"
     : session.role === "admin";
 
-  // Mirrors session.ts's isAdminOrAbove() inline, same reason as above —
-  // notification bell is Admin-and-up only ("notification bar on super
-  // admins and admins", 2026-11-21).
+  // Mirrors session.ts's isSuperAdminOnly() inline, same reason as above —
+  // notification bell is Super-Admin-only now (2026-11-22: "remove inbox
+  // from admins" — both counts it shows, Inbox unread and pending leave,
+  // are Super-Admin-only, so a plain Admin would only ever see an empty
+  // bell).
   const showNotificationBell = session.accessLevel
-    ? session.accessLevel === "admin" || session.accessLevel === "super_admin"
+    ? session.accessLevel === "super_admin"
     : session.role === "admin";
 
   async function handleLogout() {

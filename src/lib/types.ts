@@ -48,6 +48,25 @@ export interface ContactSubmission {
   read_at: string | null;
   read_by: string | null;
   created_at: string;
+  // v3.0 (supabase_patch_16) — Admin/Super Admin's reply, shown back to
+  // the employee on their own Contact Us page. Optional/nullable until
+  // that migration has run.
+  reply_message?: string | null;
+  replied_at?: string | null;
+  replied_by?: string | null;
+}
+
+// v3.0 (supabase_patch_18) — a full two-way thread on one submission:
+// either side (the sender, or Admin/Super Admin) can keep adding messages
+// to the same conversation. Supersedes the single reply_message/
+// replied_at/replied_by fields above for anything written going forward.
+export interface ContactSubmissionMessage {
+  id: string;
+  submission_id: string;
+  sender_id: string;
+  sender_name: string;
+  message: string;
+  created_at: string;
 }
 
 // Leave portal MVP (supabase_patch_10_leave_requests.sql) — request +
@@ -67,9 +86,26 @@ export interface LeaveRequest {
   decided_at: string | null;
   decision_note: string | null;
   created_at: string;
+  // v3.0 (supabase_patch_17) — a free-form Super Admin reply, independent
+  // of the approve/reject decision (e.g. a clarifying question asked
+  // before deciding). Optional/nullable until that migration has run.
+  reply_message?: string | null;
+  replied_at?: string | null;
+  replied_by?: string | null;
   // Only present on rows returned by getAllLeaveRequests(), which joins in
   // the requester's name for the Admin/Super Admin approval list.
   employee_name?: string;
+}
+
+// v3.0 (supabase_patch_18) — same two-way thread model as
+// ContactSubmissionMessage, for one leave request's conversation.
+export interface LeaveRequestMessage {
+  id: string;
+  request_id: string;
+  sender_id: string;
+  sender_name: string;
+  message: string;
+  created_at: string;
 }
 
 export type ProjectType = "Energy Modelling" | "BIM and AutoCad";

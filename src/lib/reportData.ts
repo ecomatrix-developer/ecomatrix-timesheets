@@ -115,7 +115,10 @@ export async function buildEmployeeWeeklyGrid(
 ): Promise<EmployeeWeeklyGrid> {
   const { data: entries, error } = await supabaseAdmin
     .from("timesheet_entries")
-    .select("*")
+    // buildGridFromEntries only reads project_id/category/entry_date/hours
+    // — trimmed from select("*") (mongo_id/employee_id/comment/created_at/
+    // updated_at are all dead weight here).
+    .select("project_id, category, entry_date, hours")
     .eq("employee_id", employee.id)
     .gte("entry_date", dates[0])
     .lte("entry_date", dates[dates.length - 1]);
@@ -152,7 +155,16 @@ export async function buildOwnerReportData(today: Date = new Date()): Promise<Ow
     getAllUsers(),
     supabaseAdmin
       .from("timesheet_entries")
-      .select("*")
+      // employee_id/project_id/hours/comment feed the aggregation loop
+      // below (comment for the structured category breakdown); category
+      // and entry_date aren't read THERE, but this same result is reused
+      // further down to build each employee's day-by-day grid
+      // (buildGridFromEntries, via entriesByEmployee), which needs
+      // entry_date to bucket hours by day and category for non-project
+      // rows (Vacation, Sick, etc.) — dropping either silently zeroed out
+      // the per-employee weekly tables while leaving the summary numbers
+      // correct. Trimmed from select("*"), just not far enough.
+      .select("employee_id, project_id, category, hours, comment, entry_date")
       .gte("entry_date", dates[0])
       .lte("entry_date", dates[dates.length - 1]),
     supabaseAdmin

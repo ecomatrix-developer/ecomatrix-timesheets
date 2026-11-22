@@ -1,6 +1,5 @@
 import { redirect } from "next/navigation";
-import Link from "next/link";
-import { getSession, isSuperAdminOnly } from "@/lib/session";
+import { getSession } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getAllUsers } from "@/lib/data";
 import PageTransition from "@/components/PageTransition";
@@ -14,7 +13,6 @@ import { getDateInfoBetween } from "@/lib/dateUtils";
 import { PAGE_SIZE } from "@/lib/constants";
 import { computeDailyOvertime, computeDailyRegular, computePtoTotal } from "@/lib/timesheetMath";
 import type { Project } from "@/lib/types";
-import { FaPlus, FaUserPlus, FaDatabase } from "react-icons/fa";
 
 /**
  * Personal "This Month" + recent-activity + project-breakdown data for an
@@ -328,28 +326,6 @@ export default async function DashboardPage({
           <h1 className="text-2xl font-semibold">Dashboard</h1>
           <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 xl:justify-end">
             <DateRangePicker from={dateRange.from} to={dateRange.to} preset={dateRange.preset} />
-            <Link
-              href="/timesheet"
-              className="btn-primary inline-flex items-center gap-2 px-3 py-1.5 text-sm"
-            >
-              <FaPlus className="h-3 w-3" /> Add Timesheet
-            </Link>
-            {isSuperAdminOnly(session) && (
-              <>
-                <Link
-                  href="/manage_roles"
-                  className="inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg text-white bg-emerald-600 hover:bg-emerald-700 transition-colors"
-                >
-                  <FaUserPlus className="h-3 w-3" /> Employees &amp; Roles
-                </Link>
-                <Link
-                  href="/database_stats"
-                  className="inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg text-white bg-sky-600 hover:bg-sky-700 transition-colors"
-                >
-                  <FaDatabase className="h-3 w-3" /> Database Stats
-                </Link>
-              </>
-            )}
           </div>
         </div>
 

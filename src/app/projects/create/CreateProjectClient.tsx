@@ -4,7 +4,7 @@ import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { FaPlus, FaSave, FaTrash, FaMagic } from "react-icons/fa";
-import { PROJECT_STATUSES } from "@/lib/constants";
+import { PROJECT_STATUSES, USER_TYPE_OPTIONS, ALL_USER_TYPES } from "@/lib/constants";
 import {
   createProjectsBulkAction,
   type NewProjectInput,
@@ -70,15 +70,9 @@ function legacyTypeForCategories(categories: Category[]): string {
 // timesheet. Every type checked (the default for a new row) means
 // "everyone" — identical to how every pre-patch_12 project already
 // behaves — so a project only becomes restricted when an admin actually
-// unchecks something.
-const USER_TYPE_OPTIONS = [
-  { value: "employee", label: "Employee" },
-  { value: "intern", label: "Intern" },
-  { value: "consultant", label: "Consultant" },
-  { value: "accountant", label: "Accountant" },
-  { value: "marketing_bd", label: "Marketing & BD" },
-] as const;
-const ALL_USER_TYPES = USER_TYPE_OPTIONS.map((o) => o.value) as string[];
+// unchecks something. USER_TYPE_OPTIONS/ALL_USER_TYPES live in
+// lib/constants.ts so ProjectForm's edit-side picker always offers the
+// same set.
 
 interface RowState extends NewProjectInput {
   _id: number;

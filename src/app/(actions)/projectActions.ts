@@ -220,6 +220,13 @@ export async function updateProjectAction(projectId: string, formData: FormData)
   const clientId = String(formData.get("client_id") ?? "").trim() || null;
   const clientProjectNumber = String(formData.get("client_project_number") ?? "").trim() || null;
   const scopeIdsRaw = formData.getAll("scope_ids");
+  // v3.0 (supabase_patch_11/12) — only present once ProjectForm actually
+  // rendered that field (billableSupported/visibilitySupported), same
+  // "_submitted" sentinel pattern scope_ids already uses below, so an
+  // absent field is left untouched rather than wiped back to a default.
+  const billableSubmitted = formData.has("billable_submitted");
+  const visibilitySubmitted = formData.has("visibility_submitted");
+  const visibleUserTypesRaw = formData.getAll("visible_user_types").map(String).filter(Boolean);
 
   const { error } = await supabaseAdmin
     .from("projects")
@@ -235,6 +242,12 @@ export async function updateProjectAction(projectId: string, formData: FormData)
       // (undefined keys aren't sent in a Supabase update) until then.
       ...(clientId ? { client_id: clientId } : {}),
       ...(clientProjectNumber !== null ? { client_project_number: clientProjectNumber } : {}),
+      ...(billableSubmitted ? { billable: formData.get("billable") === "true" } : {}),
+      // Empty array means "every type" (unrestricted) — stored as NULL,
+      // matching createProjectsBulkAction's own convention exactly.
+      ...(visibilitySubmitted
+        ? { visible_user_types: visibleUserTypesRaw.length > 0 ? visibleUserTypesRaw : null }
+        : {}),
     })
     .eq("id", projectId);
   if (error) throw error;

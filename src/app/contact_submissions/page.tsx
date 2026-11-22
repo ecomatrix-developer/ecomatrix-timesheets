@@ -1,42 +1,30 @@
 import { redirect } from "next/navigation";
-import { getSession, isAdminOrAbove } from "@/lib/session";
-import { getContactSubmissions } from "@/lib/data";
-import { PAGE_SIZE } from "@/lib/constants";
+import { getSession, isSuperAdminOnly } from "@/lib/session";
+import { getAllContactSubmissions, getContactSubmissionMessages } from "@/lib/data";
 import PageTransition from "@/components/PageTransition";
 import ContactSubmissionsClient from "./ContactSubmissionsClient";
-import type { ContactSubmission } from "@/lib/types";
+import type { ContactSubmission, ContactSubmissionMessage } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Admin-or-above inbox (Abeer, 2026-11-21): "create one page where super
- * admin can see them when they fill contact us forms... and save those
- * data in some table so that super admins can see every old user
- * queries." Matches the notification bell's own visibility (Admin and
- * Super Admin both) and the same Admin-or-above tier Leave approvals
- * already use — a narrower page guard than the bell that links to it
- * would just be a broken link for Admin. Also shows "Forgot Password?"
- * requests — both sources write to the same contact_submissions table
- * (supabase_patch_15).
+ * Super Admin only (Abeer, 2026-11-22: "remove inbox from admins") — a
+ * plain Admin no longer has this tab or route access at all. Also shows
+ * "Forgot Password?" requests — both sources write to the same
+ * contact_submissions table (supabase_patch_15). No pagination
+ * (2026-11-22: "it should show all the past msg as well") — the full
+ * history renders in one scrollable list instead.
  */
-export default async function ContactSubmissionsPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ page?: string }>;
-}) {
+export default async function ContactSubmissionsPage() {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (!isAdminOrAbove(session)) redirect("/dashboard");
-
-  const resolvedSearchParams = await searchParams;
-  const page = Math.max(1, parseInt(resolvedSearchParams.page ?? "1", 10) || 1);
+  if (!isSuperAdminOnly(session)) redirect("/dashboard");
 
   let items: ContactSubmission[] = [];
-  let total = 0;
+  let messages: Record<string, ContactSubmissionMessage[]> = {};
   try {
-    const result = await getContactSubmissions(PAGE_SIZE, (page - 1) * PAGE_SIZE);
-    items = result.data;
-    total = result.count;
+    items = await getAllContactSubmissions();
+    messages = await getContactSubmissionMessages();
   } catch (err) {
     const code = (err as { code?: string })?.code;
     if (code !== "PGRST205") throw err;
@@ -44,12 +32,7 @@ export default async function ContactSubmissionsPage({
 
   return (
     <PageTransition>
-      <ContactSubmissionsClient
-        items={items}
-        page={page}
-        totalPages={Math.max(1, Math.ceil(total / PAGE_SIZE))}
-        totalItems={total}
-      />
+      <ContactSubmissionsClient items={items} messages={messages} viewerId={session.userId} />
     </PageTransition>
   );
 }

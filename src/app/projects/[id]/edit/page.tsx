@@ -1,6 +1,12 @@
 import { redirect, notFound } from "next/navigation";
 import { getSession } from "@/lib/session";
-import { getProjectById, getAllClients, getAllProjectScopes } from "@/lib/data";
+import {
+  getProjectById,
+  getAllClients,
+  getAllProjectScopes,
+  isBillableColumnSupported,
+  isVisibilityColumnSupported,
+} from "@/lib/data";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import PageTransition from "@/components/PageTransition";
 import ProjectForm from "../../ProjectForm";
@@ -42,6 +48,11 @@ export default async function EditProjectPage({
     if (code !== "PGRST205") throw err;
   }
 
+  const [billableSupported, visibilitySupported] = await Promise.all([
+    isBillableColumnSupported(),
+    isVisibilityColumnSupported(),
+  ]);
+
   const boundAction = updateProjectAction.bind(null, id);
 
   return (
@@ -52,6 +63,8 @@ export default async function EditProjectPage({
         clients={clients}
         scopes={scopes}
         selectedScopeIds={selectedScopeIds}
+        billableSupported={billableSupported}
+        visibilitySupported={visibilitySupported}
       />
     </PageTransition>
   );

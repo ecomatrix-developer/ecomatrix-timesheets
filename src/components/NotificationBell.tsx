@@ -21,7 +21,7 @@ export default function NotificationBell({ initialCounts }: { initialCounts: Cou
   const [isOpen, setIsOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const [panelRect, setPanelRect] = useState<{ top: number; left: number } | null>(null);
+  const [panelRect, setPanelRect] = useState<{ top: number; left: number; width: number } | null>(null);
 
   const total = counts.contactUnread + counts.leavePending;
 
@@ -58,7 +58,13 @@ export default function NotificationBell({ initialCounts }: { initialCounts: Cou
   function handleToggle() {
     if (!isOpen && buttonRef.current) {
       const rect = buttonRef.current.getBoundingClientRect();
-      setPanelRect({ top: rect.bottom + 6, left: rect.left });
+      // Panel is a fixed w-72 (288px) — clamped so it can't overflow off
+      // the right edge on a narrow phone, where the bell sits near the
+      // screen's right edge inside the header bar (same clamping pattern
+      // as Select/DatePicker's portal dropdowns).
+      const panelWidth = Math.min(288, window.innerWidth - 16);
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - panelWidth - 8));
+      setPanelRect({ top: rect.bottom + 6, left, width: panelWidth });
       refresh();
     }
     setIsOpen((o) => !o);
@@ -85,8 +91,8 @@ export default function NotificationBell({ initialCounts }: { initialCounts: Cou
         createPortal(
           <div
             ref={panelRef}
-            style={{ position: "fixed", top: panelRect.top, left: panelRect.left }}
-            className="z-[150] w-72 bg-white rounded-xl shadow-xl border border-gray-200 py-2 text-foreground"
+            style={{ position: "fixed", top: panelRect.top, left: panelRect.left, width: panelRect.width }}
+            className="z-[150] bg-white rounded-xl shadow-xl border border-gray-200 py-2 text-foreground"
           >
             <p className="px-3.5 pb-2 text-xs font-semibold uppercase tracking-wide text-muted">
               Notifications

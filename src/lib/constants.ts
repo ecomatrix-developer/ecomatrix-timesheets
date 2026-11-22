@@ -24,6 +24,18 @@ export const PROJECT_STATUSES = [
 ] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
+// v3.0 (supabase_patch_12) — who may see/select a project on the
+// timesheet (projects.visible_user_types). Shared between project
+// creation and editing so both pickers always offer the same set.
+export const USER_TYPE_OPTIONS = [
+  { value: "employee", label: "Employee" },
+  { value: "intern", label: "Intern" },
+  { value: "consultant", label: "Consultant" },
+  { value: "accountant", label: "Accountant" },
+  { value: "marketing_bd", label: "Marketing & BD" },
+] as const;
+export const ALL_USER_TYPES = USER_TYPE_OPTIONS.map((o) => o.value) as string[];
+
 // Standard weekday minimum hours required before a day can be submitted.
 export const STANDARD_DAILY_HOURS = 7.75;
 

@@ -1,29 +1,44 @@
 import { redirect } from "next/navigation";
-import { getSession, isAdminOrAbove } from "@/lib/session";
-import { getLeaveRequestsForEmployee, getAllLeaveRequests } from "@/lib/data";
+import { getSession, isSuperAdminOnly } from "@/lib/session";
+import { getLeaveRequestsForEmployee, getAllLeaveRequests, getLeaveRequestMessages } from "@/lib/data";
 import PageTransition from "@/components/PageTransition";
 import LeaveClient from "./LeaveClient";
-import type { LeaveRequest } from "@/lib/types";
+import type { LeaveRequest, LeaveRequestMessage } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-// Everyone gets "My Requests" + a new-request form. Admin/Super Admin
-// additionally get an org-wide "Pending Approvals" section — isAdminOrAbove
-// is fallback-aware, so this works for today's unmigrated accounts too.
-// Both queries are wrapped so this page never 500s if
+// Everyone gets "My Requests" + a new-request form, including the reply
+// thread on their own request — an Admin requesting leave is just another
+// requester here, same as an Employee/Intern/Consultant/etc (2026-11-22:
+// "admins also will request or send contact like employees and others").
+// Only Super Admin gets the org-wide approval/decision view — Abeer,
+// 2026-11-21: "make sure only superadmins are able to see that, normal
+// admins cant they can only request" — that restriction is specifically
+// about DECIDING (and reading/replying on someone ELSE's request), not
+// about an Admin's own request. isSuperAdminOnly is fallback-aware, so
+// this works for today's unmigrated single-admin-tier accounts too.
+// allRequests is the FULL, unfiltered history (every status, every
+// employee, no date bound) — the client derives "still pending" from it
+// for the quick-action list, and renders the rest as a permanent decision
+// history. Both queries are wrapped so this page never 500s if
 // supabase_patch_10_leave_requests.sql hasn't been run yet.
 export default async function LeavePage() {
   const session = await getSession();
   if (!session) redirect("/login");
 
-  const canApprove = isAdminOrAbove(session);
+  const canDecide = isSuperAdminOnly(session);
 
   let myRequests: LeaveRequest[] = [];
-  let pendingRequests: LeaveRequest[] = [];
+  let allRequests: LeaveRequest[] = [];
+  let threads: Record<string, LeaveRequestMessage[]> = {};
   try {
     myRequests = await getLeaveRequestsForEmployee(session.userId);
-    if (canApprove) {
-      pendingRequests = (await getAllLeaveRequests()).filter((r) => r.status === "pending");
+    if (canDecide) {
+      allRequests = await getAllLeaveRequests();
+      // Super Admin sees every thread at once — covers their own requests too.
+      threads = await getLeaveRequestMessages();
+    } else {
+      threads = await getLeaveRequestMessages(myRequests.map((r) => r.id));
     }
   } catch (err) {
     const code = (err as { code?: string })?.code;
@@ -32,7 +47,13 @@ export default async function LeavePage() {
 
   return (
     <PageTransition>
-      <LeaveClient myRequests={myRequests} pendingRequests={pendingRequests} canApprove={canApprove} />
+      <LeaveClient
+        myRequests={myRequests}
+        allRequests={allRequests}
+        canDecide={canDecide}
+        threads={threads}
+        viewerId={session.userId}
+      />
     </PageTransition>
   );
 }

@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { requireSession, requireSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { canSubmitDay, isWeekUnlocked, hasCommentMismatch } from "@/lib/timesheetMath";
@@ -230,6 +230,7 @@ export async function reopenDayAction(employeeId: string, dateStr: string) {
   if (error) throw error;
   revalidatePath("/reports");
   revalidatePath("/admin/timesheet_view");
+  revalidateTag("reopen-timesheets"); // so the just-reopened day drops off this cached list immediately
 }
 
 /**

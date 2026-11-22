@@ -1,7 +1,7 @@
 "use server";
 
 import bcrypt from "bcryptjs";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { requireSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
@@ -46,6 +46,8 @@ export async function createEmployeeAction(
   if (error) return { error: error.message };
 
   revalidatePath("/manage_roles");
+  revalidateTag("users");
+  revalidateTag("database-stats");
   return { success: true };
 }
 
@@ -76,6 +78,9 @@ export async function deleteEmployeeAction(username: string): Promise<{ success:
   if (error) throw error;
 
   revalidatePath("/manage_roles");
+  revalidateTag("users");
+  revalidateTag("database-stats");
+  revalidateTag("insights"); // this user's timesheet entries were just deleted too
   return { success: true, message: `User ${username} and all their data has been deleted.` };
 }
 

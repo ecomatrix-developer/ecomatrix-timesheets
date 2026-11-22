@@ -1,4 +1,5 @@
 import "server-only";
+import { revalidateTag } from "next/cache";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import type { ChatMessage } from "./chat";
 
@@ -18,9 +19,11 @@ export async function loadChatHistory(adminUserId: string): Promise<ChatMessage[
 export async function appendChatMessage(adminUserId: string, role: "user" | "assistant", content: string): Promise<void> {
   const { error } = await supabaseAdmin.from("ai_chat_messages").insert({ admin_user_id: adminUserId, role, content });
   if (error) throw error;
+  revalidateTag("ai-chats"); // keeps /ai_chats (Super-Admin audit view) in sync with this new message
 }
 
 export async function clearChatHistory(adminUserId: string): Promise<void> {
   const { error } = await supabaseAdmin.from("ai_chat_messages").delete().eq("admin_user_id", adminUserId);
   if (error) throw error;
+  revalidateTag("ai-chats");
 }

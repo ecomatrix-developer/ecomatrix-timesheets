@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { unstable_cache } from "next/cache";
 import { getSession, isSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getAllUsers } from "@/lib/data";
@@ -7,6 +8,103 @@ import PageTransition from "@/components/PageTransition";
 import ReopenTimesheetsClient from "./ReopenTimesheetsClient";
 
 export const dynamic = "force-dynamic";
+
+// Abeer, 2026-11-23: "add proper caching to these pages ... reopen
+// timesheets ... only leave reports, timesheets as without caching." Both
+// read paths below (the month overview, and one month's filtered/paged
+// submission list) are cached — reopenDayAction busts the
+// "reopen-timesheets" tag so a just-reopened day disappears from the list
+// immediately instead of waiting out the TTL.
+const getReopenMonthOverviewUncached = async (): Promise<{ monthCounts: { monthYear: string; count: number }[] }> => {
+  const [{ data: earliestRow }, { data: latestRow }] = await Promise.all([
+    supabaseAdmin.from("submitted_days").select("entry_date").order("entry_date", { ascending: true }).limit(1),
+    supabaseAdmin.from("submitted_days").select("entry_date").order("entry_date", { ascending: false }).limit(1),
+  ]);
+  const earliestDate = earliestRow?.[0]?.entry_date ?? null;
+  const latestDate = latestRow?.[0]?.entry_date ?? null;
+
+  let monthCounts: { monthYear: string; count: number }[] = [];
+  if (earliestDate && latestDate) {
+    const [earliestY, earliestM] = earliestDate.split("-").map(Number);
+    const [latestY, latestM] = latestDate.split("-").map(Number);
+    const totalMonths = (latestY - earliestY) * 12 + (latestM - earliestM) + 1;
+    const monthsToShow = Math.min(36, totalMonths);
+    const monthDefs = Array.from({ length: monthsToShow }, (_, i) => {
+      const d = new Date(latestY, latestM - 1 - i, 1);
+      const y = d.getFullYear();
+      const m = d.getMonth() + 1;
+      const monthStr = String(m).padStart(2, "0");
+      const startDate = `${y}-${monthStr}-01`;
+      const lastDay = new Date(y, m, 0).getDate();
+      const endDate = `${y}-${monthStr}-${String(lastDay).padStart(2, "0")}`;
+      return { monthYear: `${y}-${monthStr}`, startDate, endDate };
+    });
+    const counts = await Promise.all(
+      monthDefs.map(({ startDate, endDate }) =>
+        supabaseAdmin
+          .from("submitted_days")
+          .select("*", { count: "exact", head: true })
+          .gte("entry_date", startDate)
+          .lte("entry_date", endDate)
+      )
+    );
+    monthCounts = monthDefs
+      .map(({ monthYear }, i) => ({ monthYear, count: counts[i].count ?? 0 }))
+      .filter((m) => m.count > 0);
+  }
+  return { monthCounts };
+};
+const getReopenMonthOverview = unstable_cache(getReopenMonthOverviewUncached, ["reopen-month-overview"], {
+  revalidate: 60,
+  tags: ["reopen-timesheets"],
+});
+
+interface ReopenMonthSubmissionsParams {
+  effectiveStart: string;
+  effectiveEnd: string;
+  matchingEmployeeIds: string[] | null;
+  page: number;
+}
+
+const getReopenMonthSubmissionsUncached = async ({
+  effectiveStart,
+  effectiveEnd,
+  matchingEmployeeIds,
+  page,
+}: ReopenMonthSubmissionsParams): Promise<{
+  rows: { employee_id: string; entry_date: string; total_hours: number; submitted_at: string }[];
+  totalItems: number;
+}> => {
+  let countQuery = supabaseAdmin
+    .from("submitted_days")
+    .select("*", { count: "exact", head: true })
+    .gte("entry_date", effectiveStart)
+    .lte("entry_date", effectiveEnd);
+  if (matchingEmployeeIds) countQuery = countQuery.in("employee_id", matchingEmployeeIds);
+  const { count, error: countErr } = await countQuery;
+  if (countErr) throw countErr;
+
+  const totalItems = count ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const from = (safePage - 1) * PAGE_SIZE;
+  const to = from + PAGE_SIZE - 1;
+
+  let rowsQuery = supabaseAdmin
+    .from("submitted_days")
+    .select("employee_id, entry_date, total_hours, submitted_at")
+    .gte("entry_date", effectiveStart)
+    .lte("entry_date", effectiveEnd);
+  if (matchingEmployeeIds) rowsQuery = rowsQuery.in("employee_id", matchingEmployeeIds);
+  const { data: rows, error } = await rowsQuery.order("submitted_at", { ascending: false }).range(from, to);
+  if (error) throw error;
+
+  return { rows: rows ?? [], totalItems };
+};
+const getReopenMonthSubmissions = unstable_cache(getReopenMonthSubmissionsUncached, ["reopen-month-submissions"], {
+  revalidate: 30,
+  tags: ["reopen-timesheets"],
+});
 
 /**
  * Admin-only, all-employees "unlock a submitted day" view — mirrors v1's
@@ -40,47 +138,7 @@ export default async function ReopenTimesheetsPage({
   const dateFilter = (resolvedSearchParams.date ?? "").trim();
 
   if (!selectedMonth) {
-    const [{ data: earliestRow }, { data: latestRow }] = await Promise.all([
-      supabaseAdmin.from("submitted_days").select("entry_date").order("entry_date", { ascending: true }).limit(1),
-      supabaseAdmin.from("submitted_days").select("entry_date").order("entry_date", { ascending: false }).limit(1),
-    ]);
-    const earliestDate = earliestRow?.[0]?.entry_date ?? null;
-    const latestDate = latestRow?.[0]?.entry_date ?? null;
-
-    // Walk backward from the latest month so the most recent one shows
-    // first, same approach as /delete_old_entries — issue every month's
-    // count query in one parallel batch instead of a serial loop. Capped
-    // at 36 months to keep this bounded.
-    let monthCounts: { monthYear: string; count: number }[] = [];
-    if (earliestDate && latestDate) {
-      const [earliestY, earliestM] = earliestDate.split("-").map(Number);
-      const [latestY, latestM] = latestDate.split("-").map(Number);
-      const totalMonths = (latestY - earliestY) * 12 + (latestM - earliestM) + 1;
-      const monthsToShow = Math.min(36, totalMonths);
-      const monthDefs = Array.from({ length: monthsToShow }, (_, i) => {
-        const d = new Date(latestY, latestM - 1 - i, 1);
-        const y = d.getFullYear();
-        const m = d.getMonth() + 1;
-        const monthStr = String(m).padStart(2, "0");
-        const startDate = `${y}-${monthStr}-01`;
-        const lastDay = new Date(y, m, 0).getDate();
-        const endDate = `${y}-${monthStr}-${String(lastDay).padStart(2, "0")}`;
-        return { monthYear: `${y}-${monthStr}`, startDate, endDate };
-      });
-      const counts = await Promise.all(
-        monthDefs.map(({ startDate, endDate }) =>
-          supabaseAdmin
-            .from("submitted_days")
-            .select("*", { count: "exact", head: true })
-            .gte("entry_date", startDate)
-            .lte("entry_date", endDate)
-        )
-      );
-      monthCounts = monthDefs
-        .map(({ monthYear }, i) => ({ monthYear, count: counts[i].count ?? 0 }))
-        .filter((m) => m.count > 0);
-    }
-
+    const { monthCounts } = await getReopenMonthOverview();
     return (
       <PageTransition>
         <ReopenTimesheetsClient selectedMonth={null} monthCounts={monthCounts} />
@@ -126,38 +184,21 @@ export default async function ReopenTimesheetsPage({
     );
   }
 
-  let countQuery = supabaseAdmin
-    .from("submitted_days")
-    .select("*", { count: "exact", head: true })
-    .gte("entry_date", effectiveStart)
-    .lte("entry_date", effectiveEnd);
-  if (matchingEmployeeIds) countQuery = countQuery.in("employee_id", matchingEmployeeIds);
-  const { count, error: countErr } = await countQuery;
-  if (countErr) throw countErr;
-
-  const totalItems = count ?? 0;
+  const { rows, totalItems } = await getReopenMonthSubmissions({
+    effectiveStart,
+    effectiveEnd,
+    matchingEmployeeIds,
+    page,
+  });
   const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
-  const from = (safePage - 1) * PAGE_SIZE;
-  const to = from + PAGE_SIZE - 1;
 
-  let rowsQuery = supabaseAdmin
-    .from("submitted_days")
-    .select("employee_id, entry_date, total_hours, submitted_at")
-    .gte("entry_date", effectiveStart)
-    .lte("entry_date", effectiveEnd);
-  if (matchingEmployeeIds) rowsQuery = rowsQuery.in("employee_id", matchingEmployeeIds);
-  const { data: rows, error } = await rowsQuery
-    .order("submitted_at", { ascending: false })
-    .range(from, to);
-  if (error) throw error;
-
-  const submissions = (rows ?? []).map((row) => ({
-    employeeId: row.employee_id as string,
+  const submissions = rows.map((row) => ({
+    employeeId: row.employee_id,
     employeeName: userById.get(row.employee_id)?.name ?? row.employee_id,
-    date: row.entry_date as string,
+    date: row.entry_date,
     totalHours: Number(row.total_hours),
-    submittedAt: row.submitted_at as string,
+    submittedAt: row.submitted_at,
   }));
 
   return (

@@ -1,9 +1,11 @@
 import { redirect } from "next/navigation";
+import { unstable_cache } from "next/cache";
 import { getSession, isSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getAllProjects, getAllUsers } from "@/lib/data";
 import PageTransition from "@/components/PageTransition";
 import InsightsClient from "./InsightsClient";
+import type { Project, PublicUser } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -57,25 +59,43 @@ async function getAllTimesheetEntriesForInsights() {
   return entries;
 }
 
-export default async function InsightsPage() {
-  const session = await getSession();
-  if (!session) redirect("/login");
-  if (!isSuperAdminOnly(session)) redirect("/login");
-
+// Abeer, 2026-11-23: "add proper caching to these pages ... Insights ...
+// only leave reports, timesheets as without caching." getAllProjects()/
+// getAllUsers() themselves stay UNCACHED (Reports and the AI assistant's
+// tools both depend on them staying live) — this wraps the RESULT of
+// calling them, specific to this page, so Insights gets its own 60s-fresh
+// cached snapshot without touching what those shared functions return
+// anywhere else. No params, so there's exactly one cache entry.
+const getInsightsDataUncached = async (): Promise<{
+  projects: Project[];
+  entries: Awaited<ReturnType<typeof getAllTimesheetEntriesForInsights>>;
+  employees: { id: string; name: string }[];
+}> => {
   const [projects, users, entries] = await Promise.all([
     getAllProjects(),
     getAllUsers(),
     getAllTimesheetEntriesForInsights(),
   ]);
-  const employees = users.filter((u) => u.role === "employee");
+  const employees = (users as PublicUser[])
+    .filter((u) => u.role === "employee")
+    .map((u) => ({ id: u.id, name: u.name }));
+  return { projects, entries, employees };
+};
+const getInsightsData = unstable_cache(getInsightsDataUncached, ["insights-data"], {
+  revalidate: 60,
+  tags: ["insights"],
+});
+
+export default async function InsightsPage() {
+  const session = await getSession();
+  if (!session) redirect("/login");
+  if (!isSuperAdminOnly(session)) redirect("/login");
+
+  const { projects, entries, employees } = await getInsightsData();
 
   return (
     <PageTransition>
-      <InsightsClient
-        entries={entries}
-        projects={projects}
-        employees={employees.map((u) => ({ id: u.id, name: u.name }))}
-      />
+      <InsightsClient entries={entries} projects={projects} employees={employees} />
     </PageTransition>
   );
 }

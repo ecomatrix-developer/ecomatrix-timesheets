@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { requireSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import type { AccessLevel, UserType } from "@/lib/types";
@@ -64,5 +64,6 @@ export async function updateUserRoleAction(
   }
 
   revalidatePath("/manage_roles");
+  revalidateTag("users");
   return { success: true };
 }

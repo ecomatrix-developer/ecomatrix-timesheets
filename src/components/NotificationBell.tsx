@@ -35,6 +35,7 @@ export default function NotificationBell({ initialCounts }: { initialCounts: Cou
   }, []);
 
   useEffect(() => {
+    refresh(); // fetch real counts immediately instead of waiting 60s for the first poll
     const interval = setInterval(refresh, 60_000);
     return () => clearInterval(interval);
   }, [refresh]);

@@ -1,0 +1,75 @@
+-- Abeer, 2026-11-23: "check again if there are some wastes heavy indexing
+-- which is not needed, give me query to fix them as well."
+--
+-- I don't have a live SQL console in this session, so I can't read
+-- pg_stat_user_indexes (Postgres's own "how many times has this index
+-- actually been used" counter) directly — that's the gold-standard way to
+-- confirm an index is dead. Before running the DROPs below, you can get
+-- that certainty yourself by running this in the Supabase SQL editor:
+--
+--   select indexrelname, idx_scan
+--   from pg_stat_user_indexes
+--   where indexrelname in (
+--     'idx_projects_status', 'idx_projects_project_type',
+--     'idx_users_username', 'idx_submitted_weeks_employee'
+--   );
+--
+-- idx_scan = 0 (or very low) on all of them confirms what the reasoning
+-- below already predicts. If Supabase has restarted recently those
+-- counters reset to 0 regardless, so don't read a single 0 as proof on
+-- its own — the table-size/cardinality argument below holds either way.
+--
+-- Four indexes, two different reasons:
+--
+-- 1-2. idx_projects_status, idx_projects_project_type — projects has 197
+--    rows, and `status` only has 4 distinct values (active/completed/
+--    re-work/archived), `project_type` only 2 ("Energy Modelling"/"BIM and
+--    AutoCad"). An index is only worth using when it lets Postgres skip
+--    most of the table — with this few distinct values, any single value
+--    still matches a big fraction of all 197 rows, so the planner's own
+--    cost estimate will almost always prefer a plain sequential scan over
+--    using either index. They cost a little on every project insert/
+--    update for no real benefit in return.
+--
+-- 3. idx_users_username — users has 20 rows. A sequential scan of 20 rows
+--    is sub-millisecond regardless of whether an index exists; this one
+--    was never going to be chosen by the planner at this size. (Note:
+--    this does NOT touch idx_users_email_unique, which is a UNIQUE
+--    constraint — that one enforces "no two users share an email," a data
+--    integrity rule, not a performance index, and stays regardless of
+--    table size.)
+--
+-- 4. idx_submitted_weeks_employee — I added this myself in
+--    supabase_patch_19, and got it wrong: submitted_weeks is never
+--    actually written to anywhere in the current app (grepped the whole
+--    codebase to confirm — it's only ever DELETEd from, as part of
+--    deleteEmployeeAction's cleanup, and COUNTed for the Database Stats
+--    "Submitted Weeks" tile, which is why it's always shown 0). It's a
+--    leftover from an earlier "submit by week" concept the app doesn't
+--    use anymore (submitted_days, one row per day, is the real mechanism).
+--    The index is dead weight on a permanently-empty table.
+--
+-- Deliberately NOT included here (checked and still genuinely needed):
+--   - idx_timesheet_entries_entry_date / idx_submitted_days_entry_date —
+--     these look redundant next to the (employee_id, entry_date) composite
+--     indexes right next to them, but they're not: Postgres can't use the
+--     second column of a composite index without the first, so any query
+--     that filters by date range ACROSS ALL employees (Database Stats,
+--     Dashboard's admin overview) needs its own plain entry_date index —
+--     confirmed these are real, separate query shapes actually used in
+--     the code, not a guess.
+--   - idx_projects_name — doesn't help the `%term%` search (no index can,
+--     without pg_trgm), but it IS what makes every `.order("name")` call
+--     (Projects list, Dashboard, exports) fast instead of an in-memory
+--     sort on every request.
+--   - idx_employee_document_downloads_document / idx_project_status_audit_
+--     project — both sit on tables with 0-1 rows today, but both are
+--     brand-new features (the document portal, the status-audit log) that
+--     accumulate one row per real event going forward — leaving these in
+--     place now avoids needing to re-add them once those tables actually
+--     grow.
+
+DROP INDEX IF EXISTS idx_projects_status;
+DROP INDEX IF EXISTS idx_projects_project_type;
+DROP INDEX IF EXISTS idx_users_username;
+DROP INDEX IF EXISTS idx_submitted_weeks_employee;

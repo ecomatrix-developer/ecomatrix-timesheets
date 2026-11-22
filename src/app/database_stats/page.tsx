@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { unstable_cache } from "next/cache";
 import { getSession, isSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import PageTransition from "@/components/PageTransition";
@@ -39,26 +40,21 @@ interface TableSizeRow {
   table_size_bytes: number;
 }
 
-export default async function DatabaseStatsPage({
-  searchParams,
-}: {
-  searchParams: Promise<{
-    usersPage?: string;
-    projectsPage?: string;
-    dateFrom?: string;
-    dateTo?: string;
-    datePreset?: string;
-  }>;
-}) {
-  const session = await getSession();
-  if (!session) redirect("/login");
-  if (!isSuperAdminOnly(session)) redirect("/login");
+interface DatabaseStatsParams {
+  dateFrom: string;
+  dateTo: string;
+  usersPage: number;
+  projectsPage: number;
+}
 
-  const resolvedSearchParams = await searchParams;
-  const dateRange = resolveDateRange(resolvedSearchParams);
-  const usersPage = Math.max(1, parseInt(resolvedSearchParams.usersPage ?? "1", 10) || 1);
-  const projectsPage = Math.max(1, parseInt(resolvedSearchParams.projectsPage ?? "1", 10) || 1);
-
+// Abeer, 2026-11-23: "add proper caching to these pages ... Database Stats
+// ... only leave reports, timesheets as without caching." Every query this
+// page runs is wrapped in one cached call keyed by the actual date range +
+// pagination — a different range/page is simply a different cache entry.
+// Busted by revalidateTag("database-stats") from deleteOldEntriesAction,
+// deleteEmployeeAction, createEmployeeAction, and the project create/
+// update/delete actions (all of which change a number shown here).
+const getDatabaseStatsUncached = async ({ dateFrom, dateTo, usersPage, projectsPage }: DatabaseStatsParams) => {
   const usersFrom = (usersPage - 1) * PAGE_SIZE;
   const usersTo = usersFrom + PAGE_SIZE - 1;
   const projectsFrom = (projectsPage - 1) * PAGE_SIZE;
@@ -89,13 +85,13 @@ export default async function DatabaseStatsPage({
     supabaseAdmin
       .from("timesheet_entries")
       .select("id", { count: "exact", head: true })
-      .gte("entry_date", dateRange.from)
-      .lte("entry_date", dateRange.to),
+      .gte("entry_date", dateFrom)
+      .lte("entry_date", dateTo),
     supabaseAdmin
       .from("submitted_days")
       .select("id", { count: "exact", head: true })
-      .gte("entry_date", dateRange.from)
-      .lte("entry_date", dateRange.to),
+      .gte("entry_date", dateFrom)
+      .lte("entry_date", dateTo),
     // Real on-disk size via the get_database_size_stats() RPC (see
     // supabase_patch_3_database_size_rpc.sql). Falls back gracefully to
     // row-count-only display if the function hasn't been created yet.
@@ -107,7 +103,7 @@ export default async function DatabaseStatsPage({
       .range(usersFrom, usersTo),
     supabaseAdmin.from("projects").select("*", { count: "exact" }).order("name").range(projectsFrom, projectsTo),
     Promise.all(
-      getDateBuckets(dateRange.from, dateRange.to).map(async (bucket) => {
+      getDateBuckets(dateFrom, dateTo).map(async (bucket) => {
         const { count, error } = await supabaseAdmin
           .from("timesheet_entries")
           .select("id", { count: "exact", head: true })
@@ -178,6 +174,77 @@ export default async function DatabaseStatsPage({
       .filter((m) => m.count > 0);
   }
 
+  return {
+    users,
+    projects,
+    entries,
+    submittedWeeks,
+    totalRows,
+    periodEntriesCount: periodEntries.count ?? 0,
+    periodSubmittedDaysCount: periodSubmittedDays.count ?? 0,
+    totalSizeBytes,
+    tableSizes,
+    rangeStats,
+    pagedUsers: (pagedUsers ?? []) as PublicUser[],
+    usersCount: usersCount ?? 0,
+    pagedProjects: (pagedProjects ?? []) as Project[],
+    projectsCount: projectsCount ?? 0,
+    earliestDate,
+    latestDate,
+    monthCounts,
+  };
+};
+
+const getDatabaseStats = unstable_cache(getDatabaseStatsUncached, ["database-stats"], {
+  revalidate: 45,
+  tags: ["database-stats"],
+});
+
+export default async function DatabaseStatsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{
+    usersPage?: string;
+    projectsPage?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    datePreset?: string;
+  }>;
+}) {
+  const session = await getSession();
+  if (!session) redirect("/login");
+  if (!isSuperAdminOnly(session)) redirect("/login");
+
+  const resolvedSearchParams = await searchParams;
+  const dateRange = resolveDateRange(resolvedSearchParams);
+  const usersPage = Math.max(1, parseInt(resolvedSearchParams.usersPage ?? "1", 10) || 1);
+  const projectsPage = Math.max(1, parseInt(resolvedSearchParams.projectsPage ?? "1", 10) || 1);
+
+  const {
+    users,
+    projects,
+    entries,
+    submittedWeeks,
+    totalRows,
+    periodEntriesCount,
+    periodSubmittedDaysCount,
+    totalSizeBytes,
+    tableSizes,
+    rangeStats,
+    pagedUsers,
+    usersCount,
+    pagedProjects,
+    projectsCount,
+    earliestDate,
+    latestDate,
+    monthCounts,
+  } = await getDatabaseStats({
+    dateFrom: dateRange.from,
+    dateTo: dateRange.to,
+    usersPage,
+    projectsPage,
+  });
+
   return (
     <PageTransition>
       <div className="w-full">
@@ -196,10 +263,10 @@ export default async function DatabaseStatsPage({
             <CountUpStat value={projects} label="Projects" accent="#22d3ee" />
           </GlassCard>
           <GlassCard>
-            <CountUpStat value={periodEntries.count ?? 0} label="Entries in Period" accent="#4ade80" />
+            <CountUpStat value={periodEntriesCount} label="Entries in Period" accent="#4ade80" />
           </GlassCard>
           <GlassCard>
-            <CountUpStat value={periodSubmittedDays.count ?? 0} label="Submitted Days in Period" accent="#facc15" />
+            <CountUpStat value={periodSubmittedDaysCount} label="Submitted Days in Period" accent="#facc15" />
           </GlassCard>
           <GlassCard>
             <CountUpStat value={submittedWeeks} label="Submitted Weeks" accent="#fb923c" />

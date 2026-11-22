@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { requireSession, isSuperAdminOnly } from "@/lib/session";
 import { getLeaveRequestById } from "@/lib/data";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
@@ -57,6 +57,7 @@ export async function createLeaveRequestAction(
   }
 
   revalidatePath("/leave");
+  revalidateTag("leave-requests");
   return { success: true };
 }
 
@@ -94,6 +95,7 @@ export async function decideLeaveRequestAction(
   if (error) return { success: false, message: error.message };
 
   revalidatePath("/leave");
+  revalidateTag("leave-requests");
   return { success: true, message: `Request ${decision}.` };
 }
 
@@ -136,5 +138,6 @@ export async function addLeaveRequestMessageAction(
   }
 
   revalidatePath("/leave");
+  revalidateTag("leave-requests");
   return { success: true, message: "Message sent." };
 }

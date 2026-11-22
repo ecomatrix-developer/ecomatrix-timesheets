@@ -1,7 +1,7 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { requireSession, requireSuperAdmin, canAccessEmployeeDocuments } from "@/lib/session";
 import { getDocumentById } from "@/lib/data";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
@@ -102,6 +102,7 @@ export async function uploadDocumentAction(
   }
 
   revalidatePath(`/manage_documents/${employeeId}`);
+  revalidateTag("documents");
   return { success: true };
 }
 
@@ -119,6 +120,7 @@ export async function deleteDocumentAction(
   if (error) return { success: false, message: error.message };
 
   revalidatePath(`/manage_documents/${doc.employee_id}`);
+  revalidateTag("documents");
   return { success: true, message: "Document deleted." };
 }
 

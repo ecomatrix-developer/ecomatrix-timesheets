@@ -29,7 +29,13 @@ export async function getUserByUsername(username: string): Promise<User | null> 
 // supabase_patch_7_roles_v3.sql runs) would 500 every one of those pages.
 // This one is only ever called from the merged Employees & Roles page
 // (/manage_roles, formerly also /create_employee).
-export async function getAllUsersWithRoles(): Promise<PublicUser[]> {
+// Abeer, 2026-11-23: "add proper caching to these pages ... only leave
+// reports, timesheets as without caching" — this is used ONLY by
+// /manage_roles and /manage_documents (verified: not shared with Reports,
+// Timesheet, or the AI assistant's tools), so it's safe to cache directly.
+// Busted by every action that changes a user's row: createEmployeeAction,
+// deleteEmployeeAction, updateUserRoleAction, resetUserPasswordAction.
+const getAllUsersWithRolesUncached = async (): Promise<PublicUser[]> => {
   const { data, error } = await supabaseAdmin
     .from("users")
     .select(
@@ -38,7 +44,11 @@ export async function getAllUsersWithRoles(): Promise<PublicUser[]> {
     .order("name");
   if (error) throw error;
   return data as PublicUser[];
-}
+};
+export const getAllUsersWithRoles = unstable_cache(getAllUsersWithRolesUncached, ["all-users-with-roles"], {
+  revalidate: 45,
+  tags: ["users"],
+});
 
 export async function getUserById(id: string): Promise<PublicUser | null> {
   const { data, error } = await supabaseAdmin
@@ -53,7 +63,9 @@ export async function getUserById(id: string): Promise<PublicUser | null> {
 // v3.0 only — same reasoning as getAllUsersWithRoles: a separate function
 // so pages that don't need the new columns (and predate the migration)
 // keep working unaffected.
-export async function getUserByIdWithRoles(id: string): Promise<PublicUser | null> {
+// Only used by /manage_documents/[userId] — safe to cache directly, same
+// "users" tag/invalidation set as getAllUsersWithRoles above.
+const getUserByIdWithRolesUncached = async (id: string): Promise<PublicUser | null> => {
   const { data, error } = await supabaseAdmin
     .from("users")
     .select(
@@ -63,12 +75,20 @@ export async function getUserByIdWithRoles(id: string): Promise<PublicUser | nul
     .maybeSingle();
   if (error) throw error;
   return data as PublicUser | null;
-}
+};
+export const getUserByIdWithRoles = unstable_cache(getUserByIdWithRolesUncached, ["user-by-id-with-roles"], {
+  revalidate: 45,
+  tags: ["users"],
+});
 
 // Employee document portal. Ordered newest first so the most recently
 // uploaded document (often what the employee or Super Admin just added)
-// is at the top.
-export async function getDocumentsForEmployee(employeeId: string): Promise<EmployeeDocument[]> {
+// is at the top. Used only by /my_documents and /manage_documents/[userId]
+// — safe to cache; uploadDocumentAction/deleteDocumentAction both bust the
+// "documents" tag so a just-uploaded/deleted file shows up immediately
+// (the forced router.refresh() those actions trigger reads past the stale
+// cache entry right away, not after the 45s TTL).
+const getDocumentsForEmployeeUncached = async (employeeId: string): Promise<EmployeeDocument[]> => {
   const { data, error } = await supabaseAdmin
     .from("employee_documents")
     .select("*")
@@ -76,7 +96,11 @@ export async function getDocumentsForEmployee(employeeId: string): Promise<Emplo
     .order("created_at", { ascending: false });
   if (error) throw error;
   return data as EmployeeDocument[];
-}
+};
+export const getDocumentsForEmployee = unstable_cache(getDocumentsForEmployeeUncached, ["documents-for-employee"], {
+  revalidate: 45,
+  tags: ["documents"],
+});
 
 export async function getDocumentById(id: string): Promise<EmployeeDocument | null> {
   const { data, error } = await supabaseAdmin
@@ -91,7 +115,7 @@ export async function getDocumentById(id: string): Promise<EmployeeDocument | nu
 // Consolidated Super Admin view (/manage_documents): one document count per
 // employee, computed from every row rather than per-employee queries, so
 // the index page is a single round trip no matter how many employees exist.
-export async function getDocumentCountsByEmployee(): Promise<Record<string, number>> {
+const getDocumentCountsByEmployeeUncached = async (): Promise<Record<string, number>> => {
   const { data, error } = await supabaseAdmin.from("employee_documents").select("employee_id");
   if (error) throw error;
   const counts: Record<string, number> = {};
@@ -99,10 +123,16 @@ export async function getDocumentCountsByEmployee(): Promise<Record<string, numb
     counts[row.employee_id] = (counts[row.employee_id] ?? 0) + 1;
   }
   return counts;
-}
+};
+export const getDocumentCountsByEmployee = unstable_cache(getDocumentCountsByEmployeeUncached, ["document-counts-by-employee"], {
+  revalidate: 45,
+  tags: ["documents"],
+});
 
 // Leave portal (MVP). Ordered newest first, same convention as documents.
-export async function getLeaveRequestsForEmployee(employeeId: string): Promise<LeaveRequest[]> {
+// Used only by /leave — safe to cache; every leave action (create, decide,
+// add thread message) busts the "leave-requests" tag.
+const getLeaveRequestsForEmployeeUncached = async (employeeId: string): Promise<LeaveRequest[]> => {
   const { data, error } = await supabaseAdmin
     .from("leave_requests")
     .select("*")
@@ -110,12 +140,16 @@ export async function getLeaveRequestsForEmployee(employeeId: string): Promise<L
     .order("created_at", { ascending: false });
   if (error) throw error;
   return data as LeaveRequest[];
-}
+};
+export const getLeaveRequestsForEmployee = unstable_cache(getLeaveRequestsForEmployeeUncached, ["leave-requests-for-employee"], {
+  revalidate: 30,
+  tags: ["leave-requests"],
+});
 
 // Admin/Super Admin approval view — every request org-wide (flat tier, no
 // team scoping, matching every other admin screen in this app), joined
 // with the requester's name so the list doesn't need a second round trip.
-export async function getAllLeaveRequests(): Promise<LeaveRequest[]> {
+const getAllLeaveRequestsUncached = async (): Promise<LeaveRequest[]> => {
   const { data, error } = await supabaseAdmin
     .from("leave_requests")
     .select("*, users!leave_requests_employee_id_fkey(name)")
@@ -125,7 +159,11 @@ export async function getAllLeaveRequests(): Promise<LeaveRequest[]> {
     ...row,
     employee_name: row.users?.name ?? "Unknown",
   }));
-}
+};
+export const getAllLeaveRequests = unstable_cache(getAllLeaveRequestsUncached, ["all-leave-requests"], {
+  revalidate: 30,
+  tags: ["leave-requests"],
+});
 
 export async function getLeaveRequestById(id: string): Promise<LeaveRequest | null> {
   const { data, error } = await supabaseAdmin
@@ -155,19 +193,26 @@ export async function getPendingLeaveRequestsCount(): Promise<number> {
 // record (not a public-facing high-volume table), so one unbounded fetch
 // is simpler and safer than paginating away history an admin needs to
 // search back through. Admin/Super Admin inbox page.
-export async function getAllContactSubmissions(): Promise<ContactSubmission[]> {
+// Used only by /contact_submissions (the Inbox) — safe to cache; every
+// mutation on this data (new submission, mark read, reply) busts the
+// "contact-submissions" tag.
+const getAllContactSubmissionsUncached = async (): Promise<ContactSubmission[]> => {
   const { data, error } = await supabaseAdmin
     .from("contact_submissions")
     .select("*")
     .order("created_at", { ascending: false });
   if (error) throw error;
   return (data ?? []) as ContactSubmission[];
-}
+};
+export const getAllContactSubmissions = unstable_cache(getAllContactSubmissionsUncached, ["all-contact-submissions"], {
+  revalidate: 30,
+  tags: ["contact-submissions"],
+});
 
 // v3.0 (supabase_patch_16) — one employee's own submissions + whatever
 // reply an Admin/Super Admin has left, newest first. Powers the "Your
 // past messages" list under the Contact Us form.
-export async function getContactSubmissionsForUser(userId: string): Promise<ContactSubmission[]> {
+const getContactSubmissionsForUserUncached = async (userId: string): Promise<ContactSubmission[]> => {
   const { data, error } = await supabaseAdmin
     .from("contact_submissions")
     .select("*")
@@ -175,7 +220,11 @@ export async function getContactSubmissionsForUser(userId: string): Promise<Cont
     .order("created_at", { ascending: false });
   if (error) throw error;
   return (data ?? []) as ContactSubmission[];
-}
+};
+export const getContactSubmissionsForUser = unstable_cache(getContactSubmissionsForUserUncached, ["contact-submissions-for-user"], {
+  revalidate: 30,
+  tags: ["contact-submissions"],
+});
 
 export async function getUnreadContactSubmissionsCount(): Promise<number> {
   const { count, error } = await supabaseAdmin
@@ -198,9 +247,9 @@ interface RawThreadMessage {
 // grouped by submission_id. Admin/Super Admin Inbox view (sees every
 // thread); pass submissionIds to scope it to one employee's own threads
 // instead (the Contact Us page).
-export async function getContactSubmissionMessages(
+const getContactSubmissionMessagesUncached = async (
   submissionIds?: string[]
-): Promise<Record<string, ContactSubmissionMessage[]>> {
+): Promise<Record<string, ContactSubmissionMessage[]>> => {
   if (submissionIds && submissionIds.length === 0) return {};
   let query = supabaseAdmin
     .from("contact_submission_messages")
@@ -221,15 +270,23 @@ export async function getContactSubmissionMessages(
     });
   }
   return result;
-}
+};
+// Used by both /contact (own threads) and /contact_submissions (every
+// thread) — both are safe to cache, same "contact-submissions" tag/
+// invalidation set as getAllContactSubmissions above.
+export const getContactSubmissionMessages = unstable_cache(
+  getContactSubmissionMessagesUncached,
+  ["contact-submission-messages"],
+  { revalidate: 30, tags: ["contact-submissions"] }
+);
 
 // v3.0 (supabase_patch_18) — same thread model as above, for leave
 // requests: every message in every thread, grouped by request_id. Super
 // Admin history view (sees every thread); pass requestIds to scope it to
 // one employee's own request threads instead ("My Requests").
-export async function getLeaveRequestMessages(
+const getLeaveRequestMessagesUncached = async (
   requestIds?: string[]
-): Promise<Record<string, LeaveRequestMessage[]>> {
+): Promise<Record<string, LeaveRequestMessage[]>> => {
   if (requestIds && requestIds.length === 0) return {};
   let query = supabaseAdmin
     .from("leave_request_messages")
@@ -250,7 +307,13 @@ export async function getLeaveRequestMessages(
     });
   }
   return result;
-}
+};
+// Used only by /leave — safe to cache, same "leave-requests" tag as the
+// two functions above.
+export const getLeaveRequestMessages = unstable_cache(getLeaveRequestMessagesUncached, ["leave-request-messages"], {
+  revalidate: 30,
+  tags: ["leave-requests"],
+});
 
 export async function getAllProjects(): Promise<Project[]> {
   const { data, error } = await supabaseAdmin
@@ -326,22 +389,40 @@ export const getAllProjectScopes = unstable_cache(getAllProjectScopesUncached, [
 // v3.0 (supabase_patch_11) — both swallow their own "not migrated yet"
 // errors instead of throwing, so the create-project page can gate its new
 // horizontal layout on a plain boolean/null check without a try/catch.
-export async function isBillableColumnSupported(): Promise<boolean> {
+// Cached long (1 hour): a column either exists or it doesn't — the only
+// time this ever flips is the one moment a migration is actually run,
+// which is a deliberate, known event, not something that needs to be
+// detected within seconds.
+const isBillableColumnSupportedUncached = async (): Promise<boolean> => {
   const { error } = await supabaseAdmin.from("projects").select("billable").limit(1);
   return !error;
-}
+};
+export const isBillableColumnSupported = unstable_cache(isBillableColumnSupportedUncached, ["billable-column-supported"], {
+  revalidate: 3600,
+  tags: ["reference-data"],
+});
 
+// Deliberately NOT cached — supabase_patch_20 made this read the live MAX
+// in-use number straight from the projects table, specifically so it
+// always reflects the current real state (see that migration's notes).
+// Caching it would reintroduce exactly the staleness problem patch_20 was
+// written to remove.
 export async function peekNextEcoMatrixNumber(): Promise<string | null> {
   const { data, error } = await supabaseAdmin.rpc("peek_eco_matrix_number");
   if (error) return null;
   return (data as string) ?? null;
 }
 
-// v3.0 (supabase_patch_12) — same swallow-the-error pattern as above.
-export async function isVisibilityColumnSupported(): Promise<boolean> {
+// v3.0 (supabase_patch_12) — same swallow-the-error pattern and long cache
+// as isBillableColumnSupported above.
+const isVisibilityColumnSupportedUncached = async (): Promise<boolean> => {
   const { error } = await supabaseAdmin.from("projects").select("visible_user_types").limit(1);
   return !error;
-}
+};
+export const isVisibilityColumnSupported = unstable_cache(isVisibilityColumnSupportedUncached, ["visibility-column-supported"], {
+  revalidate: 3600,
+  tags: ["reference-data"],
+});
 
 const getAllBillingGroupsUncached = async (): Promise<BillingGroup[]> => {
   const { data, error } = await supabaseAdmin.from("billing_groups").select("*").order("name");

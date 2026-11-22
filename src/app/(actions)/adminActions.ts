@@ -2,7 +2,7 @@
 
 import { requireSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 
 export interface DeleteOldEntriesResult {
   success: boolean;
@@ -43,6 +43,8 @@ export async function deleteOldEntriesAction(monthYear: string): Promise<DeleteO
   revalidatePath("/timesheet");
   revalidatePath("/reports");
   revalidatePath("/database_stats");
+  revalidateTag("database-stats");
+  revalidateTag("insights");
   return {
     success: true,
     message: `Successfully deleted ${count ?? 0} timesheet entries for ${monthYear}.`,

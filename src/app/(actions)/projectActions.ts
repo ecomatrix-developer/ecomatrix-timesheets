@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdmin } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
@@ -34,6 +34,8 @@ export async function createProjectAction(formData: FormData) {
   if (error) throw error;
 
   revalidatePath("/projects");
+  revalidateTag("projects");
+  revalidateTag("database-stats");
   redirect("/projects");
 }
 
@@ -203,6 +205,8 @@ export async function createProjectsBulkAction(
   );
 
   revalidatePath("/projects");
+  revalidateTag("projects");
+  revalidateTag("database-stats");
   return { success: true, count: createdIds.length };
 }
 
@@ -272,6 +276,8 @@ export async function updateProjectAction(projectId: string, formData: FormData)
   }
 
   revalidatePath("/projects");
+  revalidateTag("projects");
+  revalidateTag("database-stats");
   redirect("/projects");
 }
 
@@ -297,4 +303,6 @@ export async function deleteProjectAction(projectId: string) {
   if (error) throw error;
 
   revalidatePath("/projects");
+  revalidateTag("projects");
+  revalidateTag("database-stats");
 }

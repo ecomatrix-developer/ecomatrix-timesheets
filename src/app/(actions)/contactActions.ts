@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidateTag } from "next/cache";
 import { requireSession, isSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
@@ -47,6 +48,7 @@ export async function submitContactFormAction(
     return { error: insertErr.message };
   }
 
+  revalidateTag("contact-submissions");
   return { success: true };
 }
 
@@ -69,6 +71,7 @@ export async function markContactSubmissionReadAction(
     .eq("id", id);
   if (error) return { success: false, error: error.message };
 
+  revalidateTag("contact-submissions");
   return { success: true };
 }
 
@@ -129,5 +132,6 @@ export async function addContactSubmissionMessageAction(
     )
     .eq("id", submissionId);
 
+  revalidateTag("contact-submissions");
   return { success: true };
 }

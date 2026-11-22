@@ -2,8 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import "react-day-picker/style.css";
-import { getSession, isSuperAdminOnly } from "@/lib/session";
-import { getUnreadContactSubmissionsCount, getPendingLeaveRequestsCount } from "@/lib/data";
+import { getSession } from "@/lib/session";
 import Sidebar from "@/components/Sidebar";
 import ToastProvider from "@/components/ToastProvider";
 import AIAssistantWidget from "@/components/AIAssistantWidget";
@@ -40,24 +39,17 @@ export default async function RootLayout({
 }>) {
   const session = await getSession();
 
-  // Only Super Admin ever sees the notification bell now (2026-11-22:
-  // "remove inbox from admins" — both counts it shows are Super-Admin-
-  // only), so only they pay for these two extra queries. Guarded the same
-  // way every other v3.0 feature is — a missing table (pre-migration)
-  // degrades to 0 instead of 500ing every single page in the app.
-  let notificationCounts = { contactUnread: 0, leavePending: 0 };
-  if (session && isSuperAdminOnly(session)) {
-    try {
-      const [contactUnread, leavePending] = await Promise.all([
-        getUnreadContactSubmissionsCount(),
-        getPendingLeaveRequestsCount(),
-      ]);
-      notificationCounts = { contactUnread, leavePending };
-    } catch (err) {
-      const code = (err as { code?: string })?.code;
-      if (code !== "PGRST205") throw err;
-    }
-  }
+  // Abeer, 2026-11-23 (speed pass): this used to fetch both notification
+  // counts here with 2 live DB queries, server-side, on every single page
+  // this layout wraps — which in Next 15 means EVERY navigation re-runs
+  // them, not just the first load. Pure waste: NotificationBell already
+  // polls /api/notifications/count itself (now immediately on mount, plus
+  // every 60s) completely independently of navigation, so these counts
+  // were being computed twice for no benefit. Seeding 0/0 here just means
+  // the bell is correct within one fast client fetch after mount instead
+  // of instantly on first paint — worth it to stop paying 2 DB round
+  // trips on every click.
+  const notificationCounts = { contactUnread: 0, leavePending: 0 };
 
   return (
     <html lang="en" className={inter.variable}>

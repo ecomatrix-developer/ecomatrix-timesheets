@@ -156,14 +156,15 @@ export default function Sidebar({
     ? session.accessLevel === "super_admin"
     : session.role === "admin";
 
-  // Mirrors session.ts's isSuperAdminOnly() inline, same reason as above —
-  // notification bell is Super-Admin-only now (2026-11-22: "remove inbox
-  // from admins" — both counts it shows, Inbox unread and pending leave,
-  // are Super-Admin-only, so a plain Admin would only ever see an empty
-  // bell).
-  const showNotificationBell = session.accessLevel
-    ? session.accessLevel === "super_admin"
-    : session.role === "admin";
+  // Strict Super-Admin-only (2026-11-22: "remove notifications icon from
+  // admin panel") — no legacy-role fallback here, unlike most other
+  // checks in this file: a plain Admin must never see this, migrated or
+  // not, so this doesn't fall back to treating an unmigrated `role ===
+  // "admin"` account as Super Admin the way isSuperAdminOnly() does
+  // elsewhere. Both counts the bell shows (Inbox unread, pending leave)
+  // are already Super-Admin-only server-side, so a plain Admin would only
+  // ever see an empty bell anyway.
+  const showNotificationBell = session.accessLevel === "super_admin";
 
   async function handleLogout() {
     await logoutAction();

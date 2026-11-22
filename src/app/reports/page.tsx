@@ -169,6 +169,9 @@ export default async function ReportsPage({
       totalsMap.set(key, (totalsMap.get(key) ?? 0) + Number(e.hours ?? 0));
     }
     for (const [key, hours] of totalsMap.entries()) {
+      // Abeer, 2026-11-22: "projects ka calculator 0 wale hatana hai" — a
+      // comment-only or zero-hour entry shouldn't show up as a 0.00h row.
+      if (hours <= 0) continue;
       if (key.startsWith("p:")) {
         const p = projectMap[key.slice(2)];
         allProjectTotals.push({ label: p ? `${p.client_name} — ${p.name}` : "Unknown project", hours });

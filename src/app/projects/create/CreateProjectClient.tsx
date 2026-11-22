@@ -6,6 +6,14 @@ import { motion, AnimatePresence } from "framer-motion";
 import { FaPlus, FaSave, FaTrash, FaMagic } from "react-icons/fa";
 import { PROJECT_STATUSES, USER_TYPE_OPTIONS, ALL_USER_TYPES } from "@/lib/constants";
 import {
+  CATEGORY_OPTIONS,
+  CATEGORY_TO_SCOPE_NAME,
+  CATEGORY_LABEL,
+  isMarketingOnly,
+  legacyTypeForCategories,
+  type Category,
+} from "@/lib/projectCategories";
+import {
   createProjectsBulkAction,
   type NewProjectInput,
 } from "@/app/(actions)/projectActions";
@@ -13,58 +21,6 @@ import { toast } from "@/lib/toast";
 import Select from "@/components/Select";
 import BackLink from "@/components/BackLink";
 import type { Client, ProjectScope } from "@/lib/types";
-
-// v3.0 (supabase_patch_11; multi-select per Abeer's 2026-11-21 follow-up:
-// "project type we can choose multi select energy bim so that a single
-// project can have energy as well as bim"). Each checked category maps to
-// one project_scopes row (for the timesheet taxonomy — a project with
-// several checked gets several scope links, and the comment modal shows
-// the UNION of all their tasks) and feeds the legacy project_type enum
-// (for every pre-v3.0 page that still groups by it — dashboard, insights,
-// exports). BIM is deliberately NOT split into Revit/CAD sub-options —
-// Abeer reverted that: "Bim single like revit, cad type i dont want
-// that... make it normally bim and not seperate" — it's the one combined
-// "BIM/CADD" scope from supabase_patch_9, same as every legacy project.
-const CATEGORY_OPTIONS = [
-  { value: "energy", label: "Energy" },
-  { value: "bim", label: "BIM" },
-  { value: "marketing_bd", label: "Marketing & BD" },
-] as const;
-type Category = (typeof CATEGORY_OPTIONS)[number]["value"];
-
-const CATEGORY_TO_SCOPE_NAME: Record<Category, string> = {
-  energy: "Energy",
-  bim: "BIM/CADD",
-  marketing_bd: "Marketing & BD",
-};
-const CATEGORY_TO_LEGACY_TYPE: Record<Category, string> = {
-  energy: "Energy Modelling",
-  bim: "BIM and AutoCad",
-  marketing_bd: "BIM and AutoCad",
-};
-const CATEGORY_LABEL: Record<Category, string> = {
-  energy: "Energy",
-  bim: "BIM",
-  marketing_bd: "Marketing & BD",
-};
-
-// The reduced "just a name" layout only applies when Marketing & BD is the
-// ONLY thing checked (internal, non-client work) — checking it alongside
-// Energy/BIM still means a real client project, so it keeps the full
-// number/client layout.
-function isMarketingOnly(categories: Category[]): boolean {
-  return categories.length === 1 && categories[0] === "marketing_bd";
-}
-
-// Legacy project_type only has 2 buckets; "BIM" wins if checked at all
-// (matches the pre-multi-select behavior), else Energy, else (Marketing &
-// BD alone) falls back to "BIM and AutoCad" — the same convention
-// patch_9's own internal Marketing & BD project already uses.
-function legacyTypeForCategories(categories: Category[]): string {
-  if (categories.includes("bim")) return CATEGORY_TO_LEGACY_TYPE.bim;
-  if (categories.includes("energy")) return CATEGORY_TO_LEGACY_TYPE.energy;
-  return CATEGORY_TO_LEGACY_TYPE.marketing_bd;
-}
 
 // v3.0 (supabase_patch_12): who may see/select this project on the
 // timesheet. Every type checked (the default for a new row) means

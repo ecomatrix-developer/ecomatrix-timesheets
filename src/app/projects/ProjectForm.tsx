@@ -4,6 +4,13 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { FaSave, FaLock } from "react-icons/fa";
 import { PROJECT_STATUSES, USER_TYPE_OPTIONS, ALL_USER_TYPES } from "@/lib/constants";
+import {
+  CATEGORY_OPTIONS,
+  categoriesFromScopeIds,
+  scopeIdsFromCategories,
+  legacyTypeForCategories,
+  type Category,
+} from "@/lib/projectCategories";
 import type { Project, Client, ProjectScope } from "@/lib/types";
 import Select from "@/components/Select";
 import BackLink from "@/components/BackLink";
@@ -26,13 +33,38 @@ export default function ProjectForm({
   visibilitySupported?: boolean;
 }) {
   const v3 = clients.length > 0;
+  const hasScopesCatalog = scopes.length > 0;
   // Select renders its own button/panel, not a native <select>, so its
   // value isn't picked up by FormData automatically — a hidden input
   // mirrors the controlled state into the form submission.
-  const [projectType, setProjectType] = useState<string>(project?.project_type ?? "Energy Modelling");
+  // v3.0 (2026-11-22): Edit now uses the SAME Energy/BIM/Marketing & BD
+  // category pills as Create instead of the old 2-option "Project Type"
+  // dropdown + a raw 6-chip scope picker (which still listed the retired
+  // "BIM - CAD"/"BIM - Revit" scopes) — that mismatch is what Abeer meant
+  // by "the older version is still there" / "multi select nahi aara hai"
+  // on this page. categoriesFromScopeIds folds any legacy scope link back
+  // onto the right pill so an older project still shows correctly checked.
+  const [categories, setCategories] = useState<Category[]>(
+    hasScopesCatalog ? categoriesFromScopeIds(selectedScopeIds, scopes) : []
+  );
+  // Only used on the pre-migration form (no scopes catalog at all) where
+  // the legacy dropdown is the only option.
+  const [legacyProjectType, setLegacyProjectType] = useState<string>(
+    project?.project_type ?? "Energy Modelling"
+  );
   const [status, setStatus] = useState<string>(project?.status ?? "active");
   const [clientId, setClientId] = useState<string>(project?.client_id ?? "");
-  const [scopeIds, setScopeIds] = useState<string[]>(selectedScopeIds);
+
+  function toggleCategory(category: Category) {
+    setCategories((prev) => {
+      const has = prev.includes(category);
+      if (has && prev.length === 1) return prev; // keep at least one checked
+      return has ? prev.filter((c) => c !== category) : [...prev, category];
+    });
+  }
+
+  const projectType = hasScopesCatalog ? legacyTypeForCategories(categories) : legacyProjectType;
+  const scopeIds = hasScopesCatalog ? scopeIdsFromCategories(categories, scopes) : [];
   // v3.0 (supabase_patch_11/12) — same fields Create Project lets you set,
   // now editable too (previously Billing/Visible To could only ever be set
   // once, at creation, with no way back in). Undefined project.billable
@@ -44,10 +76,6 @@ export default function ProjectForm({
       ? project.visible_user_types
       : [...ALL_USER_TYPES]
   );
-
-  function toggleScope(id: string) {
-    setScopeIds((prev) => (prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]));
-  }
 
   function toggleVisibleType(type: string) {
     setVisibleTypes((prev) => {
@@ -157,22 +185,55 @@ export default function ProjectForm({
         />
       </div>
 
-      <div>
-        <label className="text-sm text-muted mb-1 block">Project Type</label>
-        {/* Splits the project into the Energy Modelling / BIM and AutoCad
-            dropdown groups on the Timesheet page — matches v1's
-            edit_project.html exactly, including the "Energy Modelling"
-            default for a project with no type set yet. */}
-        <input type="hidden" name="project_type" value={projectType} />
-        <Select
-          value={projectType}
-          onChange={setProjectType}
-          options={[
-            { value: "Energy Modelling", label: "Energy Modelling" },
-            { value: "BIM and AutoCad", label: "BIM and AutoCad" },
-          ]}
-        />
-      </div>
+      <input type="hidden" name="project_type" value={projectType} />
+      {hasScopesCatalog ? (
+        <div>
+          <label className="text-sm text-muted mb-1 block">Project Type</label>
+          {/* Same multi-select pills as Create — which scope(s) are
+              checked drives both the legacy project_type column above AND
+              the project_scope_links rows below (which tasks show in the
+              timesheet comment modal). */}
+          <input type="hidden" name="scopes_submitted" value="1" />
+          <div className="flex flex-wrap gap-2">
+            {CATEGORY_OPTIONS.map((o) => {
+              const checked = categories.includes(o.value);
+              return (
+                <button
+                  key={o.value}
+                  type="button"
+                  onClick={() => toggleCategory(o.value)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                    checked
+                      ? "bg-accent text-white border-accent"
+                      : "bg-white text-muted border-gray-200 hover:border-gray-300"
+                  }`}
+                >
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+          {scopeIds.map((id) => (
+            <input key={id} type="hidden" name="scope_ids" value={id} />
+          ))}
+        </div>
+      ) : (
+        <div>
+          <label className="text-sm text-muted mb-1 block">Project Type</label>
+          {/* Pre-migration fallback only (supabase_patch_9 scopes table
+              not live yet) — matches v1's edit_project.html exactly,
+              including the "Energy Modelling" default for a project with
+              no type set yet. */}
+          <Select
+            value={legacyProjectType}
+            onChange={setLegacyProjectType}
+            options={[
+              { value: "Energy Modelling", label: "Energy Modelling" },
+              { value: "BIM and AutoCad", label: "BIM and AutoCad" },
+            ]}
+          />
+        </div>
+      )}
 
       <div>
         <label className="text-sm text-muted mb-1 block">Status</label>
@@ -229,37 +290,6 @@ export default function ProjectForm({
               );
             })}
           </div>
-        </div>
-      )}
-
-      {v3 && scopes.length > 0 && (
-        <div>
-          <label className="text-sm text-muted mb-1 block">
-            Scopes (which tasks show on the timesheet)
-          </label>
-          <input type="hidden" name="scopes_submitted" value="1" />
-          <div className="flex flex-wrap gap-2">
-            {scopes.map((s) => {
-              const checked = scopeIds.includes(s.id);
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  onClick={() => toggleScope(s.id)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                    checked
-                      ? "bg-accent text-white border-accent"
-                      : "bg-white text-muted border-gray-200 hover:border-gray-300"
-                  }`}
-                >
-                  {s.name}
-                </button>
-              );
-            })}
-          </div>
-          {scopeIds.map((id) => (
-            <input key={id} type="hidden" name="scope_ids" value={id} />
-          ))}
         </div>
       )}
 

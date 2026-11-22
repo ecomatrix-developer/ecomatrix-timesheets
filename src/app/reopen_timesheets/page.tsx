@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
 export default async function ReopenTimesheetsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ month?: string; page?: string }>;
+  searchParams: Promise<{ month?: string; page?: string; search?: string; date?: string }>;
 }) {
   const session = await getSession();
   if (!session) redirect("/login");
@@ -33,6 +33,11 @@ export default async function ReopenTimesheetsPage({
   const resolvedSearchParams = await searchParams;
   const selectedMonth = resolvedSearchParams.month ?? null; // "YYYY-MM"
   const page = Math.max(1, parseInt(resolvedSearchParams.page ?? "1", 10) || 1);
+  // Abeer, 2026-11-22: "Reopen timesheets - filters name, date!" — an
+  // employee-name search and an exact-date filter, both scoped within the
+  // already-selected month (this page never lists across months at once).
+  const search = (resolvedSearchParams.search ?? "").trim();
+  const dateFilter = (resolvedSearchParams.date ?? "").trim();
 
   if (!selectedMonth) {
     const [{ data: earliestRow }, { data: latestRow }] = await Promise.all([
@@ -89,14 +94,45 @@ export default async function ReopenTimesheetsPage({
   const lastDay = new Date(y, m, 0).getDate();
   const endDate = `${y}-${monthStr}-${String(lastDay).padStart(2, "0")}`;
 
-  const [users, { count, error: countErr }] = await Promise.all([
-    getAllUsers(),
-    supabaseAdmin
-      .from("submitted_days")
-      .select("*", { count: "exact", head: true })
-      .gte("entry_date", startDate)
-      .lte("entry_date", endDate),
-  ]);
+  const users = await getAllUsers();
+  const userById = new Map(users.map((u) => [u.id, u]));
+
+  // A date filter narrows the range to that single day; an out-of-month
+  // date is simply left out of the range below rather than ever throwing
+  // (the query just comes back empty).
+  const effectiveStart = dateFilter || startDate;
+  const effectiveEnd = dateFilter || endDate;
+
+  // Name search has no column on submitted_days to filter by directly —
+  // resolve it to the matching employee ids first and filter with .in(),
+  // same pattern as other pages' name/search filters.
+  const matchingEmployeeIds = search
+    ? users.filter((u) => u.name.toLowerCase().includes(search.toLowerCase())).map((u) => u.id)
+    : null;
+
+  if (matchingEmployeeIds && matchingEmployeeIds.length === 0) {
+    return (
+      <PageTransition>
+        <ReopenTimesheetsClient
+          selectedMonth={selectedMonth}
+          submissions={[]}
+          page={1}
+          totalPages={1}
+          totalItems={0}
+          search={search}
+          date={dateFilter}
+        />
+      </PageTransition>
+    );
+  }
+
+  let countQuery = supabaseAdmin
+    .from("submitted_days")
+    .select("*", { count: "exact", head: true })
+    .gte("entry_date", effectiveStart)
+    .lte("entry_date", effectiveEnd);
+  if (matchingEmployeeIds) countQuery = countQuery.in("employee_id", matchingEmployeeIds);
+  const { count, error: countErr } = await countQuery;
   if (countErr) throw countErr;
 
   const totalItems = count ?? 0;
@@ -105,16 +141,17 @@ export default async function ReopenTimesheetsPage({
   const from = (safePage - 1) * PAGE_SIZE;
   const to = from + PAGE_SIZE - 1;
 
-  const { data: rows, error } = await supabaseAdmin
+  let rowsQuery = supabaseAdmin
     .from("submitted_days")
     .select("employee_id, entry_date, total_hours, submitted_at")
-    .gte("entry_date", startDate)
-    .lte("entry_date", endDate)
+    .gte("entry_date", effectiveStart)
+    .lte("entry_date", effectiveEnd);
+  if (matchingEmployeeIds) rowsQuery = rowsQuery.in("employee_id", matchingEmployeeIds);
+  const { data: rows, error } = await rowsQuery
     .order("submitted_at", { ascending: false })
     .range(from, to);
   if (error) throw error;
 
-  const userById = new Map(users.map((u) => [u.id, u]));
   const submissions = (rows ?? []).map((row) => ({
     employeeId: row.employee_id as string,
     employeeName: userById.get(row.employee_id)?.name ?? row.employee_id,
@@ -131,6 +168,8 @@ export default async function ReopenTimesheetsPage({
         page={safePage}
         totalPages={totalPages}
         totalItems={totalItems}
+        search={search}
+        date={dateFilter}
       />
     </PageTransition>
   );

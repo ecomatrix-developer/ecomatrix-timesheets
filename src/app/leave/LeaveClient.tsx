@@ -241,7 +241,7 @@ export default function LeaveClient({
   function renderPreviewLine(r: LeaveRequest) {
     const timeline = getTimelineItems(r);
     if (timeline.length === 0) {
-      return <span className="text-xs text-muted italic truncate">No messages yet — click to start a conversation.</span>;
+      return <span className="italic">No messages yet — click to start a conversation.</span>;
     }
     const last = timeline[timeline.length - 1];
     const who =
@@ -254,9 +254,9 @@ export default function LeaveClient({
         : last.m.sender_name;
     const text = last.type === "decision" ? r.decision_note : last.m.message;
     return (
-      <span className="text-xs text-muted truncate">
+      <>
         <span className="font-medium text-foreground">{who}:</span> {text}
-      </span>
+      </>
     );
   }
 
@@ -429,12 +429,16 @@ export default function LeaveClient({
                           <button
                             type="button"
                             onClick={() => toggleExpand(r.id)}
-                            className="w-full flex items-center justify-between gap-2 mt-1 text-left"
+                            className="w-full min-w-0 flex items-center gap-2 mt-1 text-left"
                           >
-                            <span className="flex items-center gap-1.5 min-w-0">
-                              <FaCommentDots className="h-3 w-3 shrink-0 text-accent" />
-                              <span className="min-w-0">{renderPreviewLine(r)}</span>
-                            </span>
+                            <FaCommentDots className="h-3 w-3 shrink-0 text-accent" />
+                            {/* A plain <span> can't be truncated by CSS
+                                (overflow doesn't apply to inline boxes) —
+                                needs to be a block-level, width-constrained
+                                flex child. */}
+                            <div className="min-w-0 flex-1 truncate text-xs text-muted">
+                              {renderPreviewLine(r)}
+                            </div>
                             <FaChevronDown className={`h-3 w-3 shrink-0 text-muted transition-transform ${expanded ? "rotate-180" : ""}`} />
                           </button>
                           {expanded && renderTimeline(r)}

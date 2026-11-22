@@ -39,7 +39,11 @@ export default async function EditProjectPage({
       getAllProjectScopes(),
       supabaseAdmin.from("project_scope_links").select("scope_id").eq("project_id", id),
     ]);
-    clients = clientsRes;
+    // Keeps the project's CURRENT client selectable even if it's since
+    // been deactivated (so Edit never shows a blank/invalid selection),
+    // while every other option offered is active-only — same rule as the
+    // Create page.
+    clients = clientsRes.filter((c) => c.active || c.id === project.client_id);
     scopes = scopesRes;
     if (linksRes.error) throw linksRes.error;
     selectedScopeIds = linksRes.data.map((r) => r.scope_id);

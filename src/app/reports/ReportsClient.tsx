@@ -235,21 +235,32 @@ export default function ReportsClient({
                   <p className="text-xs text-muted">Monthly Total</p>
                   <p className="text-2xl font-semibold">{gridData.monthlyTotal.toFixed(2)}h</p>
                 </div>
-                <div className="glass p-4">
-                  <p className="text-xs text-muted">PTO Summary</p>
-                  <p className="text-2xl font-semibold text-amber-500">{gridData.ptoSummary.toFixed(2)}h</p>
-                </div>
+                {/* Abeer, 2026-11-22: "leave summary card ... 0 wale hatana
+                    hai" — the leave-related cards (PTO/Vacation/Special
+                    Vacation) only render once there's something to show;
+                    Monthly Total and Overtime stay as the two always-on
+                    stats. */}
+                {gridData.ptoSummary > 0 && (
+                  <div className="glass p-4">
+                    <p className="text-xs text-muted">PTO Summary</p>
+                    <p className="text-2xl font-semibold text-amber-500">{gridData.ptoSummary.toFixed(2)}h</p>
+                  </div>
+                )}
                 {/* Vacation summaries are month-scoped; special vacation remains year-to-date. */}
-                <div className="glass p-4">
-                  <p className="text-xs text-muted">Vacation Summary</p>
-                  <p className="text-2xl font-semibold text-cyan-500">{gridData.vacationSummary.toFixed(2)}h</p>
-                </div>
-                <div className="glass p-4">
-                  <p className="text-xs text-muted">Special Vacation</p>
-                  <p className="text-2xl font-semibold text-amber-500">
-                    {(gridData.specialVacationYear + gridData.specialVacationBankedYear).toFixed(2)}h
-                  </p>
-                </div>
+                {gridData.vacationSummary > 0 && (
+                  <div className="glass p-4">
+                    <p className="text-xs text-muted">Vacation Summary</p>
+                    <p className="text-2xl font-semibold text-cyan-500">{gridData.vacationSummary.toFixed(2)}h</p>
+                  </div>
+                )}
+                {gridData.specialVacationYear + gridData.specialVacationBankedYear > 0 && (
+                  <div className="glass p-4">
+                    <p className="text-xs text-muted">Special Vacation</p>
+                    <p className="text-2xl font-semibold text-amber-500">
+                      {(gridData.specialVacationYear + gridData.specialVacationBankedYear).toFixed(2)}h
+                    </p>
+                  </div>
+                )}
                 <div className="glass p-4">
                   <p className="text-xs text-muted">Overtime Summary</p>
                   <p className="text-2xl font-semibold text-red-600">{gridData.overtimeSummary.toFixed(2)}h</p>

@@ -26,6 +26,10 @@ export default async function CreateProjectPage() {
   let scopes: ProjectScope[] = [];
   try {
     [clients, scopes] = await Promise.all([getAllClients(), getAllProjectScopes()]);
+    // A new project should only ever be assigned an active client —
+    // deactivating one (via the new /clients page) removes it from this
+    // picker without touching any existing project that already uses it.
+    clients = clients.filter((c) => c.active);
   } catch (err) {
     const code = (err as { code?: string })?.code;
     if (code !== "PGRST205") throw err;

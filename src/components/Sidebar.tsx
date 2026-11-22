@@ -23,6 +23,8 @@ import {
   FaUpload,
   FaCalendarAlt,
   FaInbox,
+  FaRobot,
+  FaBuilding,
 } from "react-icons/fa";
 import type { IconType } from "react-icons";
 import type { SessionPayload } from "@/lib/types";
@@ -50,6 +52,7 @@ const superAdminLinks: { href: string; label: string; Icon: IconType }[] = [
   { href: "/dashboard", label: "Dashboard", Icon: FaTachometerAlt },
   { href: "/timesheet", label: "Timesheet", Icon: FaClock },
   { href: "/projects", label: "Projects", Icon: FaProjectDiagram },
+  { href: "/clients", label: "Clients", Icon: FaBuilding },
   { href: "/leave", label: "Leave", Icon: FaCalendarAlt },
   { href: "/manage_roles", label: "Employees & Roles", Icon: FaUserShield },
   { href: "/contact_submissions", label: "Inbox", Icon: FaInbox },
@@ -58,6 +61,11 @@ const superAdminLinks: { href: string; label: string; Icon: IconType }[] = [
   { href: "/reopen_timesheets", label: "Reopen Timesheets", Icon: FaLockOpen },
   { href: "/insights", label: "Insights", Icon: FaChartPie },
   { href: "/export_timesheet", label: "Export Timesheet", Icon: FaFileExcel },
+  // Abeer, 2026-11-22: "Chats alag se karna h, jaha ai agent ki chats
+  // dikhe create a new page only for super admins" — a standalone page
+  // for every admin's AI assistant conversation history, Super-Admin-only
+  // like Inbox/Database Stats/Reopen Timesheets above.
+  { href: "/ai_chats", label: "AI Chats", Icon: FaRobot },
 ];
 
 // Same as superAdminLinks, plus Upload Documents/My Documents — used only

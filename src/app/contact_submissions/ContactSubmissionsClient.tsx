@@ -99,14 +99,14 @@ export default function ContactSubmissionsClient({
 
   function renderPreviewLine(item: ContactSubmission, thread: ContactSubmissionMessage[]) {
     if (thread.length === 0) {
-      return <span className="text-xs text-muted italic truncate">No replies yet — click to reply.</span>;
+      return <span className="italic">No replies yet — click to reply.</span>;
     }
     const last = thread[thread.length - 1];
     const who = last.sender_id === viewerId ? "You" : last.sender_name;
     return (
-      <span className="text-xs text-muted truncate">
+      <>
         <span className="font-medium text-foreground">{who}:</span> {last.message}
-      </span>
+      </>
     );
   }
 
@@ -171,12 +171,15 @@ export default function ContactSubmissionsClient({
                         e.stopPropagation();
                         toggleExpand(item.id);
                       }}
-                      className="w-full flex items-center justify-between gap-2 mt-2 text-left"
+                      className="w-full min-w-0 flex items-center gap-2 mt-2 text-left"
                     >
-                      <span className="flex items-center gap-1.5 min-w-0">
-                        <FaCommentDots className="h-3 w-3 shrink-0 text-accent" />
-                        <span className="min-w-0">{renderPreviewLine(item, thread)}</span>
-                      </span>
+                      <FaCommentDots className="h-3 w-3 shrink-0 text-accent" />
+                      {/* A plain <span> can't be truncated by CSS (overflow
+                          doesn't apply to inline boxes) — needs to be a
+                          block-level, width-constrained flex child. */}
+                      <div className="min-w-0 flex-1 truncate text-xs text-muted">
+                        {renderPreviewLine(item, thread)}
+                      </div>
                       <FaChevronDown className={`h-3 w-3 shrink-0 text-muted transition-transform ${expanded ? "rotate-180" : ""}`} />
                     </button>
 

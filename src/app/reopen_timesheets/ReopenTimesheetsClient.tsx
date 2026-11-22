@@ -1,10 +1,11 @@
 "use client";
 
-import { useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { FaUndo, FaLockOpen, FaClipboardList, FaCalendarAlt, FaArrowLeft } from "react-icons/fa";
+import { FaUndo, FaLockOpen, FaClipboardList, FaCalendarAlt, FaArrowLeft, FaTimes } from "react-icons/fa";
 import Pagination from "@/components/Pagination";
+import DatePicker from "@/components/DatePicker";
 import { reopenDayAction } from "@/app/(actions)/timesheetActions";
 import { toast } from "@/lib/toast";
 import { PAGE_SIZE } from "@/lib/constants";
@@ -37,6 +38,8 @@ export default function ReopenTimesheetsClient(
         page: number;
         totalPages: number;
         totalItems: number;
+        search: string;
+        date: string;
       }
 ) {
   const router = useRouter();
@@ -50,9 +53,26 @@ export default function ReopenTimesheetsClient(
     router.push("/reopen_timesheets", { scroll: false });
   }
 
-  function goToPage(nextPage: number, monthYear: string) {
-    router.push(`/reopen_timesheets?month=${monthYear}&page=${nextPage}`, { scroll: false });
+  // Centralizes the query string so changing one filter (name/date/page)
+  // never drops the others — always reads the CURRENT props, only
+  // overriding what's passed in.
+  function navigate(monthYear: string, overrides: { search?: string; date?: string; page?: number }) {
+    const base = props.selectedMonth === monthYear ? props : null;
+    const search = overrides.search !== undefined ? overrides.search : base?.search ?? "";
+    const date = overrides.date !== undefined ? overrides.date : base?.date ?? "";
+    const page = overrides.page !== undefined ? overrides.page : undefined;
+
+    const params = new URLSearchParams({ month: monthYear });
+    if (search) params.set("search", search);
+    if (date) params.set("date", date);
+    if (page && page > 1) params.set("page", String(page));
+
+    router.push(`/reopen_timesheets?${params.toString()}`, { scroll: false });
     router.refresh();
+  }
+
+  function goToPage(nextPage: number, monthYear: string) {
+    navigate(monthYear, { page: nextPage });
   }
 
   function handleReopen(employeeId: string, employeeName: string, dateStr: string) {
@@ -117,7 +137,7 @@ export default function ReopenTimesheetsClient(
     );
   }
 
-  const { selectedMonth, submissions, page, totalPages, totalItems } = props;
+  const { selectedMonth, submissions, page, totalPages, totalItems, search, date } = props;
 
   return (
     <div className="w-full">
@@ -128,6 +148,8 @@ export default function ReopenTimesheetsClient(
       >
         <FaArrowLeft className="h-3 w-3" /> Back to months
       </button>
+
+      <ReopenFilters selectedMonth={selectedMonth} search={search} date={date} onNavigate={navigate} />
 
       <div className="glass p-4">
         <h2 className="mb-3 font-semibold">{formatMonthYear(selectedMonth)}</h2>
@@ -184,6 +206,75 @@ export default function ReopenTimesheetsClient(
           onPageChange={(nextPage) => goToPage(nextPage, selectedMonth)}
         />
       </div>
+    </div>
+  );
+}
+
+function ReopenFilters({
+  selectedMonth,
+  search,
+  date,
+  onNavigate,
+}: {
+  selectedMonth: string;
+  search: string;
+  date: string;
+  onNavigate: (monthYear: string, overrides: { search?: string; date?: string; page?: number }) => void;
+}) {
+  // Live search: debounce keystrokes instead of waiting for a submit —
+  // same pattern as ProjectSummaryAccordion's name filter on Reports.
+  const [searchDraft, setSearchDraft] = useState(search);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isFirstRender = useRef(true);
+
+  useEffect(() => {
+    setSearchDraft(search);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMonth, search]);
+
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      onNavigate(selectedMonth, { search: searchDraft, page: 1 });
+    }, 350);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchDraft]);
+
+  return (
+    <div className="glass p-4 mb-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+      <div className="flex-1">
+        <label className="text-xs text-muted block mb-1">Employee name</label>
+        <input
+          value={searchDraft}
+          onChange={(e) => setSearchDraft(e.target.value)}
+          placeholder="Search by name…"
+          className="glass-input w-full px-3 py-2.5 text-sm"
+        />
+      </div>
+      <div className="sm:w-56">
+        <label className="text-xs text-muted block mb-1">Date</label>
+        <DatePicker
+          value={date}
+          onChange={(value) => onNavigate(selectedMonth, { date: value, page: 1 })}
+          placeholder="Any date this month"
+        />
+      </div>
+      {(search || date) && (
+        <button
+          type="button"
+          onClick={() => onNavigate(selectedMonth, { search: "", date: "", page: 1 })}
+          className="btn-ghost inline-flex items-center gap-2 px-3 py-2.5 text-sm shrink-0"
+        >
+          <FaTimes className="h-3 w-3" /> Clear filters
+        </button>
+      )}
     </div>
   );
 }

@@ -21,12 +21,7 @@ function getSecretKey(): Uint8Array {
 }
 
 export async function createSession(payload: SessionPayload): Promise<void> {
-  // validatedAt is middleware-internal bookkeeping (not part of
-  // SessionPayload) — it's freshly fetched from the DB right now (this is
-  // login), so the clock starts here. See middleware.ts for why this
-  // exists: it bounds how long a demoted/deleted account's OLD session can
-  // keep working.
-  const token = await new SignJWT({ ...payload, validatedAt: Date.now() })
+  const token = await new SignJWT({ ...payload })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${SESSION_DURATION_SECONDS}s`)

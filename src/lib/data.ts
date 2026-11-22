@@ -1,4 +1,5 @@
 import "server-only";
+import { unstable_cache } from "next/cache";
 import { supabaseAdmin } from "./supabaseAdmin";
 import type { BillingGroup, Client, ContactSubmission, ContactSubmissionMessage, EmployeeDocument, LeaveRequest, LeaveRequestMessage, Project, ProjectScope, PublicUser, Task, User } from "./types";
 
@@ -291,17 +292,36 @@ export function toUserMap(users: PublicUser[]): Record<string, PublicUser> {
 // predates it.
 // ---------------------------------------------------------------------
 
-export async function getAllClients(): Promise<Client[]> {
+// Abeer, 2026-11-22: "do that selective caching, exclude timesheets,
+// reports, reopen timesheets, dashboard and leaves" — clients/scopes/
+// billing groups/tasks are seeded once via SQL migration and have no
+// edit UI anywhere in the app, so there's nothing that can make them go
+// stale in practice; a 10-minute cache has no real downside and shaves a
+// round trip off every page that loads them (Projects create/edit, the
+// Timesheet comment-modal taxonomy, etc.) — none of which are on the
+// excluded list themselves. getTimesheetTaxonomy below deliberately does
+// NOT wrap its project_scope_links fetch the same way: that table
+// changes every time a project is created/edited, and the Timesheet
+// page's comment dropdown depends on it staying live.
+const getAllClientsUncached = async (): Promise<Client[]> => {
   const { data, error } = await supabaseAdmin.from("clients").select("*").order("name");
   if (error) throw error;
   return data as Client[];
-}
+};
+export const getAllClients = unstable_cache(getAllClientsUncached, ["all-clients"], {
+  revalidate: 600,
+  tags: ["reference-data"],
+});
 
-export async function getAllProjectScopes(): Promise<ProjectScope[]> {
+const getAllProjectScopesUncached = async (): Promise<ProjectScope[]> => {
   const { data, error } = await supabaseAdmin.from("project_scopes").select("*").order("name");
   if (error) throw error;
   return data as ProjectScope[];
-}
+};
+export const getAllProjectScopes = unstable_cache(getAllProjectScopesUncached, ["all-project-scopes"], {
+  revalidate: 600,
+  tags: ["reference-data"],
+});
 
 // v3.0 (supabase_patch_11) — both swallow their own "not migrated yet"
 // errors instead of throwing, so the create-project page can gate its new
@@ -323,17 +343,25 @@ export async function isVisibilityColumnSupported(): Promise<boolean> {
   return !error;
 }
 
-export async function getAllBillingGroups(): Promise<BillingGroup[]> {
+const getAllBillingGroupsUncached = async (): Promise<BillingGroup[]> => {
   const { data, error } = await supabaseAdmin.from("billing_groups").select("*").order("name");
   if (error) throw error;
   return data as BillingGroup[];
-}
+};
+export const getAllBillingGroups = unstable_cache(getAllBillingGroupsUncached, ["all-billing-groups"], {
+  revalidate: 600,
+  tags: ["reference-data"],
+});
 
-export async function getAllTasks(): Promise<Task[]> {
+const getAllTasksUncached = async (): Promise<Task[]> => {
   const { data, error } = await supabaseAdmin.from("tasks").select("*").order("name");
   if (error) throw error;
   return data as Task[];
-}
+};
+export const getAllTasks = unstable_cache(getAllTasksUncached, ["all-tasks"], {
+  revalidate: 600,
+  tags: ["reference-data"],
+});
 
 export interface TimesheetTaxonomy {
   scopes: ProjectScope[];

@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getSession, isSuperAdminOnly } from "@/lib/session";
-import { getAllUsersWithRoles } from "@/lib/data";
+import { getAllUsersWithRoles, getCurrentLeaveBalancesByEmployee } from "@/lib/data";
 import PageTransition from "@/components/PageTransition";
 import ManageRolesClient from "./ManageRolesClient";
 
@@ -22,11 +22,14 @@ export default async function ManageRolesPage() {
   if (!session) redirect("/login");
   if (!isSuperAdminOnly(session)) redirect("/login");
 
-  const users = await getAllUsersWithRoles();
+  const [users, leaveBalances] = await Promise.all([
+    getAllUsersWithRoles(),
+    getCurrentLeaveBalancesByEmployee(),
+  ]);
 
   return (
     <PageTransition>
-      <ManageRolesClient users={users} />
+      <ManageRolesClient users={users} leaveBalances={leaveBalances} />
     </PageTransition>
   );
 }

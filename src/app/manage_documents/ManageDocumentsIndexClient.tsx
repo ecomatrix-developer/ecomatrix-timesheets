@@ -33,8 +33,8 @@ export default function ManageDocumentsIndexClient({
       </h1>
       <p className="text-sm text-muted mb-6">
         A consolidated view of every employee and how many documents are on file for them. Open
-        an employee to upload, view, or delete their documents — only that employee and Super
-        Admin can ever see them.
+        an employee to create folders and upload, view, or delete their documents — only that
+        employee, Super Admin, and Accountant can ever see them.
       </p>
 
       <div className="relative mb-4 max-w-md">

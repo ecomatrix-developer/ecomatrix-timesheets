@@ -128,6 +128,20 @@ const consultantLinks: { href: string; label: string; Icon: IconType }[] = [
   { href: "/my_documents", label: "My Documents", Icon: FaFileAlt },
 ];
 
+// Abeer, 2026-11-27: "for the accountant login, make it like a custom
+// dashboard... the pages options would be, dashboard, upload documents,
+// all users doc view... and leaves view" — a deliberately different,
+// smaller nav than every other User-tier type: no Timesheet/Projects,
+// just the three things an Accountant actually needs. "Upload Documents"
+// is the same /manage_documents flow Super Admin uses (pick an employee,
+// then their folders) — now open to Accountant too (see
+// isSuperAdminOrAccountant in session.ts).
+const accountantLinks: { href: string; label: string; Icon: IconType }[] = [
+  { href: "/dashboard", label: "Dashboard", Icon: FaTachometerAlt },
+  { href: "/manage_documents", label: "Upload Documents", Icon: FaUpload },
+  { href: "/leave_overview", label: "Leaves View", Icon: FaCalendarAlt },
+];
+
 export default function Sidebar({
   session,
   notificationCounts = { contactUnread: 0, leavePending: 0 },
@@ -153,7 +167,9 @@ export default function Sidebar({
     }
     if (session.accessLevel === "super_admin") return superAdminLinksV3;
     if (session.accessLevel === "admin") return adminLinksV3;
-    return session.userType === "consultant" ? consultantLinks : userLinksV3;
+    if (session.userType === "consultant") return consultantLinks;
+    if (session.userType === "accountant") return accountantLinks;
+    return userLinksV3;
   })();
 
   // Abeer, 2026-11-21: "remove contact us from super admin." Mirrors

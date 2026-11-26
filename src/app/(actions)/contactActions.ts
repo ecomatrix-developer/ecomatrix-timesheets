@@ -3,6 +3,9 @@
 import { revalidateTag } from "next/cache";
 import { requireSession, isSuperAdminOnly } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { getSuperAdminEmails } from "@/lib/data";
+import { sendHtmlEmail } from "@/lib/mailer";
+import { buildContactFormEmail } from "@/lib/emailTemplates";
 
 export interface ContactFormState {
   error?: string;
@@ -11,12 +14,13 @@ export interface ContactFormState {
 
 /**
  * Replaces v1's external link to ecomatrix.io/contact-us. Stores the
- * submission (supabase_patch_15) — in-app only, never emailed (2026-11-22:
- * "remove this email from there which is sending to anup and erv email
- * when someone fills contact us forms, not need to send real email
- * there"). Super Admin sees every submission (read or not) on
- * /contact_submissions, and new ones surface in the notification bell
- * (2026-11-22: "remove inbox from admins" — Super-Admin-only now).
+ * submission (supabase_patch_15) and, as of 2026-11-26, also emails every
+ * Super Admin a formatted notification so they don't have to be watching
+ * the inbox live — Super-Admin-only recipients, not Admins (2026-11-26:
+ * "for contact us form only superadmins will see that"), consistent with
+ * /contact_submissions itself already being Super-Admin-only (2026-11-22:
+ * "remove inbox from admins"). Super Admin still sees every submission
+ * (read or not) there, and new ones surface in the notification bell too.
  */
 export async function submitContactFormAction(
   _prevState: ContactFormState,
@@ -46,6 +50,22 @@ export async function submitContactFormAction(
       };
     }
     return { error: insertErr.message };
+  }
+
+  const { subject: emailSubject, html, text } = buildContactFormEmail({
+    senderName: session.name,
+    senderUsername: session.username,
+    subject,
+    message,
+    submittedAt: new Date().toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }),
+  });
+  // Awaited (not fire-and-forget): on Vercel, a serverless function can be
+  // frozen the instant it returns, so an un-awaited send can simply never
+  // go out. Failure is swallowed — a slow/broken mail server must never
+  // block the submission from succeeding.
+  const recipients = await getSuperAdminEmails().catch(() => []);
+  if (recipients.length > 0) {
+    await sendHtmlEmail(recipients, emailSubject, html, text).catch(() => {});
   }
 
   revalidateTag("contact-submissions");

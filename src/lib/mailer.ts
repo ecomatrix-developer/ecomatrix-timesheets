@@ -92,3 +92,40 @@ export async function sendPlainEmail(
     return { sent: false, reason: err instanceof Error ? err.message : String(err) };
   }
 }
+
+/**
+ * HTML + plain-text fallback email — used for the Contact Us and Leave
+ * Request admin-notification emails (2026-11-26), which need a real
+ * formatted layout instead of a plain text dump.
+ */
+export async function sendHtmlEmail(
+  recipients: string[],
+  subject: string,
+  html: string,
+  text: string,
+  replyTo?: string
+): Promise<{ sent: boolean; reason?: string }> {
+  const setup = getTransporter();
+  if (!setup) {
+    console.warn("Email credentials not configured (EMAIL_USER/EMAIL_PASSWORD). Skipping email.");
+    return { sent: false, reason: "Email is not configured yet. Please contact the admin directly." };
+  }
+  if (recipients.length === 0) {
+    return { sent: false, reason: "No recipient email is configured for this deployment." };
+  }
+
+  try {
+    await setup.transporter.sendMail({
+      from: `"Eco Matrix Timesheets" <${setup.user}>`,
+      to: recipients.join(", "),
+      replyTo,
+      subject,
+      text,
+      html,
+    });
+    return { sent: true };
+  } catch (err) {
+    console.error("Failed to send email:", err);
+    return { sent: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}

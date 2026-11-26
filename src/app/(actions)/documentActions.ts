@@ -2,25 +2,11 @@
 
 import { randomUUID } from "node:crypto";
 import { revalidatePath, revalidateTag } from "next/cache";
-import { requireSession, requireSuperAdmin, canAccessEmployeeDocuments } from "@/lib/session";
-import { getDocumentById } from "@/lib/data";
+import { requireSession, requireSuperAdminOrAccountant, canAccessEmployeeDocuments } from "@/lib/session";
+import { getDocumentById, getDocumentFolderById } from "@/lib/data";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import type { DocumentCategory } from "@/lib/types";
 
 const BUCKET = "employee-documents";
-
-const DOCUMENT_CATEGORIES: DocumentCategory[] = [
-  "salary_slip",
-  "offer_letter",
-  "appointment_letter",
-  "confirmation_letter",
-  "increment_letter",
-  "nda",
-  "id_proof",
-  "address_proof",
-  "bank_document",
-  "other",
-];
 
 export interface UploadDocumentState {
   error?: string;
@@ -32,27 +18,28 @@ function sanitizeFileName(name: string): string {
 }
 
 /**
- * Super-Admin-only. Uploads a file for one specific employee into the
- * private employee-documents bucket, then records it. Will fail with a
- * friendly message if supabase_patch_8_documents.sql hasn't been run yet
- * (missing table/bucket).
+ * Super-Admin or Accountant. Uploads a file for one specific employee,
+ * inside one specific folder, into the private employee-documents bucket,
+ * then records it. Will fail with a friendly message if
+ * supabase_patch_8_documents.sql hasn't been run yet (missing table/
+ * bucket).
  */
 export async function uploadDocumentAction(
   employeeId: string,
+  folderId: string,
   _prevState: UploadDocumentState,
   formData: FormData
 ): Promise<UploadDocumentState> {
-  const session = await requireSuperAdmin();
+  const session = await requireSuperAdminOrAccountant();
 
-  const category = String(formData.get("category") ?? "");
-  const title = String(formData.get("title") ?? "").trim();
   const file = formData.get("file");
 
-  if (!DOCUMENT_CATEGORIES.includes(category as DocumentCategory)) {
-    return { error: "Invalid document category." };
+  if (!folderId) {
+    return { error: "Open a folder first — files can't be uploaded at the top level." };
   }
-  if (!title) {
-    return { error: "Title is required." };
+  const folder = await getDocumentFolderById(folderId);
+  if (!folder || folder.employee_id !== employeeId) {
+    return { error: "That folder no longer exists." };
   }
   if (!(file instanceof File) || file.size === 0) {
     return { error: "Choose a file to upload." };
@@ -79,11 +66,15 @@ export async function uploadDocumentAction(
     return { error: uploadError.message };
   }
 
+  // Abeer, 2026-11-27: "the name of file will be shown there" — the
+  // folder-based UI doesn't collect a separate title anymore, the
+  // uploaded file's own name IS the title.
   const { error: insertError } = await supabaseAdmin.from("employee_documents").insert({
     employee_id: employeeId,
     uploaded_by: session.userId,
-    category,
-    title,
+    category: null,
+    folder_id: folderId,
+    title: file.name,
     storage_path: storagePath,
     file_name: file.name,
     file_size: file.size,
@@ -106,11 +97,11 @@ export async function uploadDocumentAction(
   return { success: true };
 }
 
-/** Super-Admin-only. Removes both the storage object and its DB row. */
+/** Super-Admin or Accountant. Removes both the storage object and its DB row. */
 export async function deleteDocumentAction(
   documentId: string
 ): Promise<{ success: boolean; message: string }> {
-  await requireSuperAdmin();
+  await requireSuperAdminOrAccountant();
 
   const doc = await getDocumentById(documentId);
   if (!doc) return { success: false, message: "Document not found." };
@@ -122,6 +113,67 @@ export async function deleteDocumentAction(
   revalidatePath(`/manage_documents/${doc.employee_id}`);
   revalidateTag("documents");
   return { success: true, message: "Document deleted." };
+}
+
+/**
+ * Super-Admin or Accountant (supabase_patch_24) — creates a named folder
+ * inside one employee's document space. Abeer, 2026-11-27: "create a
+ * folder and name that folder and we can go inside that folder and
+ * upload the document."
+ */
+export async function createDocumentFolderAction(
+  employeeId: string,
+  name: string
+): Promise<{ success: boolean; message: string; folderId?: string }> {
+  const session = await requireSuperAdminOrAccountant();
+
+  const trimmed = name.trim();
+  if (!trimmed) return { success: false, message: "Folder name is required." };
+  if (trimmed.length > 100) return { success: false, message: "Folder name is too long." };
+
+  const { data, error } = await supabaseAdmin
+    .from("document_folders")
+    .insert({ employee_id: employeeId, name: trimmed, created_by: session.userId })
+    .select("id")
+    .single();
+  if (error) {
+    if (error.code === "23505") return { success: false, message: "A folder with that name already exists." };
+    if (error.code === "PGRST205") {
+      return { success: false, message: "Folders haven't been set up yet. Contact your developer, then try again." };
+    }
+    return { success: false, message: error.message };
+  }
+
+  revalidatePath(`/manage_documents/${employeeId}`);
+  revalidateTag("documents");
+  return { success: true, message: "Folder created.", folderId: data.id };
+}
+
+/**
+ * Super-Admin or Accountant. Refuses to delete a folder that still has
+ * documents in it (the DB's ON DELETE RESTRICT on employee_documents.
+ * folder_id surfaces as a foreign-key-violation error, caught below) —
+ * move or delete the files inside first.
+ */
+export async function deleteDocumentFolderAction(
+  folderId: string
+): Promise<{ success: boolean; message: string }> {
+  await requireSuperAdminOrAccountant();
+
+  const folder = await getDocumentFolderById(folderId);
+  if (!folder) return { success: false, message: "Folder not found." };
+
+  const { error } = await supabaseAdmin.from("document_folders").delete().eq("id", folderId);
+  if (error) {
+    if (error.code === "23503") {
+      return { success: false, message: "This folder still has files in it — delete those first." };
+    }
+    return { success: false, message: error.message };
+  }
+
+  revalidatePath(`/manage_documents/${folder.employee_id}`);
+  revalidateTag("documents");
+  return { success: true, message: "Folder deleted." };
 }
 
 /**

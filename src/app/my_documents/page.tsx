@@ -1,9 +1,9 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
-import { getDocumentsForEmployee } from "@/lib/data";
+import { getDocumentsForEmployee, getDocumentFoldersForEmployee } from "@/lib/data";
 import PageTransition from "@/components/PageTransition";
 import MyDocumentsClient from "./MyDocumentsClient";
-import type { EmployeeDocument } from "@/lib/types";
+import type { EmployeeDocument, DocumentFolder } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -22,8 +22,12 @@ export default async function MyDocumentsPage() {
   // schema cache"), not the raw Postgres 42P01 — it resolves the table
   // before the query ever reaches Postgres.
   let documents: EmployeeDocument[] = [];
+  let folders: DocumentFolder[] = [];
   try {
-    documents = await getDocumentsForEmployee(session.userId);
+    [documents, folders] = await Promise.all([
+      getDocumentsForEmployee(session.userId),
+      getDocumentFoldersForEmployee(session.userId),
+    ]);
   } catch (err) {
     const code = (err as { code?: string })?.code;
     if (code !== "PGRST205") throw err;
@@ -31,7 +35,7 @@ export default async function MyDocumentsPage() {
 
   return (
     <PageTransition>
-      <MyDocumentsClient documents={documents} />
+      <MyDocumentsClient documents={documents} folders={folders} />
     </PageTransition>
   );
 }

@@ -1,9 +1,16 @@
 import { redirect } from "next/navigation";
 import { getSession, isSuperAdminOnly } from "@/lib/session";
-import { getLeaveRequestsForEmployee, getAllLeaveRequests, getLeaveRequestMessages } from "@/lib/data";
+import {
+  getLeaveRequestsForEmployee,
+  getAllLeaveRequests,
+  getLeaveRequestMessages,
+  getLeaveSummaryForEmployee,
+  getAllUsers,
+  getCurrentLeaveBalancesByEmployee,
+} from "@/lib/data";
 import PageTransition from "@/components/PageTransition";
 import LeaveClient from "./LeaveClient";
-import type { LeaveRequest, LeaveRequestMessage } from "@/lib/types";
+import type { LeaveRequest, LeaveRequestMessage, LeaveSummary, PublicUser, LeaveBalance } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -31,12 +38,22 @@ export default async function LeavePage() {
   let myRequests: LeaveRequest[] = [];
   let allRequests: LeaveRequest[] = [];
   let threads: Record<string, LeaveRequestMessage[]> = {};
+  let mySummary: LeaveSummary | null = null;
+  let allUsers: PublicUser[] = [];
+  let leaveBalances: Record<string, LeaveBalance> = {};
   try {
-    myRequests = await getLeaveRequestsForEmployee(session.userId);
+    [myRequests, mySummary] = await Promise.all([
+      getLeaveRequestsForEmployee(session.userId),
+      getLeaveSummaryForEmployee(session.userId),
+    ]);
     if (canDecide) {
-      allRequests = await getAllLeaveRequests();
-      // Super Admin sees every thread at once — covers their own requests too.
-      threads = await getLeaveRequestMessages();
+      [allRequests, threads, allUsers, leaveBalances] = await Promise.all([
+        getAllLeaveRequests(),
+        // Super Admin sees every thread at once — covers their own requests too.
+        getLeaveRequestMessages(),
+        getAllUsers(),
+        getCurrentLeaveBalancesByEmployee(),
+      ]);
     } else {
       threads = await getLeaveRequestMessages(myRequests.map((r) => r.id));
     }
@@ -53,6 +70,9 @@ export default async function LeavePage() {
         canDecide={canDecide}
         threads={threads}
         viewerId={session.userId}
+        mySummary={mySummary}
+        allUsers={allUsers}
+        leaveBalances={leaveBalances}
       />
     </PageTransition>
   );

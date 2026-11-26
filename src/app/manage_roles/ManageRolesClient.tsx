@@ -5,7 +5,7 @@ import { useFormStatus } from "react-dom";
 import { useActionState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { PublicUser, AccessLevel, UserType } from "@/lib/types";
+import type { PublicUser, AccessLevel, UserType, LeaveBalance } from "@/lib/types";
 import { updateUserRoleAction } from "@/app/(actions)/roleActions";
 import {
   createEmployeeAction,
@@ -15,6 +15,7 @@ import {
 } from "@/app/(actions)/employeeActions";
 import Select from "@/components/Select";
 import Modal from "@/components/Modal";
+import LeaveBalanceModal from "@/components/LeaveBalanceModal";
 import { toast } from "@/lib/toast";
 import {
   FaUserShield,
@@ -27,6 +28,7 @@ import {
   FaKey,
   FaCopy,
   FaSync,
+  FaCalendarAlt,
 } from "react-icons/fa";
 
 // No ambiguous characters (0/O, 1/l/I) — easier to read back over a call.
@@ -89,12 +91,29 @@ function CreateEmployeeSubmitButton() {
  * existing employee is both role-editable AND deletable right here, no
  * second page needed.
  */
-export default function ManageRolesClient({ users }: { users: PublicUser[] }) {
+export default function ManageRolesClient({
+  users,
+  leaveBalances,
+}: {
+  users: PublicUser[];
+  leaveBalances: Record<string, LeaveBalance>;
+}) {
   const router = useRouter();
   const [rows, setRows] = useState<Record<string, RowState>>(() =>
     Object.fromEntries(users.map((u) => [u.id, toRowState(u)]))
   );
+  // Abeer, 2026-11-26: "its showing like the save button by default so its
+  // like if i change the roles sometimes superadmins feels that its done,
+  // and they dont click the save button so highlight that cell properly
+  // and if someone changes anything then show the save button otherwise
+  // grey out that" — savedRows is the last-saved (or initial) snapshot;
+  // comparing against it is what drives both the Save button's
+  // enabled/disabled styling and the per-field highlight below.
+  const [savedRows, setSavedRows] = useState<Record<string, RowState>>(() =>
+    Object.fromEntries(users.map((u) => [u.id, toRowState(u)]))
+  );
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [leaveTarget, setLeaveTarget] = useState<PublicUser | null>(null);
   const [, startTransition] = useTransition();
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -123,6 +142,20 @@ export default function ManageRolesClient({ users }: { users: PublicUser[] }) {
     setRows((prev) => ({ ...prev, [id]: { ...prev[id], ...partial } }));
   }
 
+  function isRowDirty(id: string): boolean {
+    const a = rows[id];
+    const b = savedRows[id];
+    if (!a || !b) return false;
+    return a.access_level !== b.access_level || a.user_type !== b.user_type || a.email !== b.email || a.job_title !== b.job_title;
+  }
+
+  function isFieldDirty(id: string, key: keyof RowState): boolean {
+    const a = rows[id];
+    const b = savedRows[id];
+    if (!a || !b) return false;
+    return a[key] !== b[key];
+  }
+
   function save(id: string) {
     const row = rows[id];
     if (!row) return;
@@ -135,8 +168,12 @@ export default function ManageRolesClient({ users }: { users: PublicUser[] }) {
       fd.set("job_title", row.job_title);
       const result = await updateUserRoleAction(id, fd);
       setPendingId(null);
-      if (result.error) toast.error(result.error);
-      else toast.success("Role updated.");
+      if (result.error) {
+        toast.error(result.error);
+      } else {
+        toast.success("Role updated.");
+        setSavedRows((prev) => ({ ...prev, [id]: row }));
+      }
     });
   }
 
@@ -257,8 +294,11 @@ export default function ManageRolesClient({ users }: { users: PublicUser[] }) {
               {filteredUsers.map((u) => {
                 const row = rows[u.id];
                 if (!row) return null;
+                const dirty = isRowDirty(u.id);
+                const fieldRing = (key: keyof RowState) =>
+                  isFieldDirty(u.id, key) ? "ring-2 ring-amber-400 rounded-lg" : "";
                 return (
-                  <tr key={u.id}>
+                  <tr key={u.id} className={dirty ? "bg-amber-50/40" : undefined}>
                     <td className="px-3 py-2.5">
                       <p className="font-medium truncate" title={u.name}>{u.name}</p>
                       <p className="text-xs text-muted truncate" title={u.username}>{u.username}</p>
@@ -268,6 +308,7 @@ export default function ManageRolesClient({ users }: { users: PublicUser[] }) {
                         value={row.access_level}
                         onChange={(v) => patch(u.id, { access_level: v as AccessLevel })}
                         options={ACCESS_LEVEL_OPTIONS}
+                        className={fieldRing("access_level")}
                       />
                     </td>
                     <td className="px-3 py-2.5">
@@ -276,6 +317,7 @@ export default function ManageRolesClient({ users }: { users: PublicUser[] }) {
                         onChange={(v) => patch(u.id, { user_type: v as UserType })}
                         options={USER_TYPE_OPTIONS}
                         disabled={row.access_level !== "user"}
+                        className={fieldRing("user_type")}
                       />
                     </td>
                     <td className="px-3 py-2.5">
@@ -283,7 +325,7 @@ export default function ManageRolesClient({ users }: { users: PublicUser[] }) {
                         value={row.email}
                         onChange={(e) => patch(u.id, { email: e.target.value })}
                         placeholder="name@ecomatrix.io"
-                        className="glass-input w-full px-2.5 py-1.5 text-sm"
+                        className={`glass-input w-full px-2.5 py-1.5 text-sm ${fieldRing("email")}`}
                       />
                     </td>
                     <td className="px-3 py-2.5">
@@ -291,18 +333,29 @@ export default function ManageRolesClient({ users }: { users: PublicUser[] }) {
                         value={row.job_title}
                         onChange={(e) => patch(u.id, { job_title: e.target.value })}
                         placeholder="e.g. Senior BIM Modeler"
-                        className="glass-input w-full px-2.5 py-1.5 text-sm"
+                        className={`glass-input w-full px-2.5 py-1.5 text-sm ${fieldRing("job_title")}`}
                       />
                     </td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-1 flex-wrap">
                         <button
                           onClick={() => save(u.id)}
-                          disabled={pendingId === u.id}
-                          title="Save"
-                          className="shrink-0 p-2 rounded-lg text-white bg-accent hover:bg-accent/90 transition-colors disabled:opacity-50"
+                          disabled={pendingId === u.id || !dirty}
+                          title={dirty ? "Save changes" : "No changes to save"}
+                          className={`shrink-0 p-2 rounded-lg transition-colors disabled:cursor-not-allowed ${
+                            dirty
+                              ? "text-white bg-accent hover:bg-accent/90 disabled:opacity-50"
+                              : "text-gray-400 bg-gray-100"
+                          }`}
                         >
                           <FaSave className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setLeaveTarget(u)}
+                          title="Assign leave balance"
+                          className="shrink-0 p-2 rounded-lg text-emerald-600 hover:bg-emerald-50 transition-colors"
+                        >
+                          <FaCalendarAlt className="h-3.5 w-3.5" />
                         </button>
                         <button
                           onClick={() => openReset(u)}
@@ -456,6 +509,13 @@ export default function ManageRolesClient({ users }: { users: PublicUser[] }) {
           </>
         )}
       </Modal>
+
+      <LeaveBalanceModal
+        open={!!leaveTarget}
+        onClose={() => setLeaveTarget(null)}
+        employee={leaveTarget ? { id: leaveTarget.id, name: leaveTarget.name } : null}
+        initialBalance={leaveTarget ? leaveBalances[leaveTarget.id] ?? null : null}
+      />
     </div>
   );
 }

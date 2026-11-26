@@ -137,15 +137,38 @@ export async function requireSuperAdminOnly(): Promise<SessionPayload> {
   return session;
 }
 
+// Abeer, 2026-11-27: "for the accountant login, make it like a custom
+// dashboard... all users doc view o that accountant can check the docs of
+// the users and also upload them" — the one deliberate widening of the
+// "only the employee and Super Admin" documents rule below. userType is
+// the v3.0 axis Accountant lives on (not accessLevel), so this checks
+// that instead.
+export function isAccountant(session: SessionPayload): boolean {
+  return session.userType === "accountant";
+}
+
+export function isSuperAdminOrAccountant(session: SessionPayload): boolean {
+  return isSuperAdmin(session) || isAccountant(session);
+}
+
+export async function requireSuperAdminOrAccountant(): Promise<SessionPayload> {
+  const session = await requireSession();
+  if (!isSuperAdminOrAccountant(session)) {
+    throw new Error("FORBIDDEN");
+  }
+  return session;
+}
+
 // A document belonging to `employeeId` is visible only to that employee
-// themselves and to a Super Admin — nobody else, including a plain Admin
-// (matches the brief's "No access to other people's personal documents"
-// rule, and Abeer's explicit instruction that nobody but the employee and
-// Super Admin can ever see their documents). Uses the strict isSuperAdmin
-// (no legacy-role fallback) deliberately: documents are a brand-new
-// feature with no prior "admin could already see these" behavior to stay
-// compatible with, so there's no reason to admit a not-yet-migrated
-// legacy admin here the way isSuperAdminOnly does for older pages.
+// themselves, a Super Admin, or an Accountant — nobody else, including a
+// plain Admin (matches the brief's "No access to other people's personal
+// documents" rule, and Abeer's explicit instruction that nobody but the
+// employee, Super Admin, and (2026-11-27) Accountant can ever see their
+// documents). Uses the strict isSuperAdmin (no legacy-role fallback)
+// deliberately: documents are a brand-new feature with no prior "admin
+// could already see these" behavior to stay compatible with, so there's
+// no reason to admit a not-yet-migrated legacy admin here the way
+// isSuperAdminOnly does for older pages.
 export function canAccessEmployeeDocuments(session: SessionPayload, employeeId: string): boolean {
-  return session.userId === employeeId || isSuperAdmin(session);
+  return session.userId === employeeId || isSuperAdminOrAccountant(session);
 }

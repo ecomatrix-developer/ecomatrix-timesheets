@@ -1,8 +1,9 @@
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/session";
+import { getSession, isAccountant } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { getAllUsers } from "@/lib/data";
+import { getAllUsers, getDocumentCountsByEmployee, getTotalDocumentFolderCount, getAllLeaveRequests } from "@/lib/data";
 import PageTransition from "@/components/PageTransition";
+import AccountantDashboardClient from "./AccountantDashboardClient";
 import DashboardStats from "./DashboardStats";
 import DashboardProjectsTable from "./DashboardProjectsTable";
 import DashboardOverview from "./DashboardOverview";
@@ -12,6 +13,7 @@ import { getDateBuckets, getDateStrings, resolveDateRange } from "@/lib/dateRang
 import { getDateInfoBetween } from "@/lib/dateUtils";
 import { PAGE_SIZE } from "@/lib/constants";
 import { computeDailyOvertime, computeDailyRegular, computePtoTotal } from "@/lib/timesheetMath";
+import { isWhollyHalfDayRow } from "@/lib/leavePolicy";
 import type { Project } from "@/lib/types";
 
 /**
@@ -227,6 +229,56 @@ export default async function DashboardPage({
 }) {
   const session = await getSession();
   if (!session) redirect("/login");
+
+  // Abeer, 2026-11-27: "for accountant this dashboard wont work, make
+  // some other dashboard for accountant so that its relevant" — everything
+  // below this (project portfolio, timesheet overview) is irrelevant to an
+  // Accountant's job, which is entirely Documents + Leaves View. Branches
+  // out before any of those project/timesheet queries even run.
+  if (isAccountant(session)) {
+    let totalEmployees = 0;
+    let totalDocuments = 0;
+    let totalFolders = 0;
+    let onLeaveToday: { name: string; leaveType: string; half: boolean }[] = [];
+    try {
+      const [users, docCounts, folderCount, allRequests] = await Promise.all([
+        getAllUsers(),
+        getDocumentCountsByEmployee(),
+        getTotalDocumentFolderCount(),
+        getAllLeaveRequests(),
+      ]);
+      totalEmployees = users.length;
+      totalDocuments = Object.values(docCounts).reduce((sum, n) => sum + n, 0);
+      totalFolders = folderCount;
+      const todayIso = new Date().toISOString().slice(0, 10);
+      onLeaveToday = allRequests
+        .filter((r) => r.status === "approved" && r.start_date <= todayIso && r.end_date >= todayIso)
+        .map((r) => ({
+          name: r.employee_name ?? "Employee",
+          leaveType: r.leave_type,
+          // Abeer, 2026-11-27: "on calender its not showing proper half
+          // day and full day" — day_type is always "full" now (half/full
+          // is decided per date, see buildSegments in leaveActions.ts),
+          // so this infers it from days_count instead, same as the
+          // Leave Calendar and Leave page lists do.
+          half: isWhollyHalfDayRow(r.start_date, r.end_date, r.days_count),
+        }));
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
+      if (code !== "PGRST205") throw err;
+    }
+
+    return (
+      <PageTransition>
+        <AccountantDashboardClient
+          totalEmployees={totalEmployees}
+          totalDocuments={totalDocuments}
+          totalFolders={totalFolders}
+          onLeaveToday={onLeaveToday}
+        />
+      </PageTransition>
+    );
+  }
 
   const resolvedSearchParams = await searchParams;
   const dateRange = resolveDateRange(resolvedSearchParams);

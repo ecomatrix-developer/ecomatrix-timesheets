@@ -73,6 +73,10 @@ export interface ContactSubmissionMessage {
 // approve/reject only, no balance tracking yet.
 export type LeaveType = "sick" | "casual" | "annual" | "unpaid" | "other";
 export type LeaveStatus = "pending" | "approved" | "rejected";
+// v3.0 (supabase_patch_22) — "half" only ever applies to a single-date
+// request (start_date === end_date), enforced both in createLeaveRequestAction
+// and by a DB CHECK constraint.
+export type LeaveDayType = "full" | "half";
 
 export interface LeaveRequest {
   id: string;
@@ -92,6 +96,13 @@ export interface LeaveRequest {
   reply_message?: string | null;
   replied_at?: string | null;
   replied_by?: string | null;
+  // v3.0 (supabase_patch_22) — day_type drives days_count: "full" counts
+  // every calendar day in the range (inclusive), "half" is always exactly
+  // 0.5. days_count is what the leave-balance math (getLeaveSummaryForEmployee)
+  // actually sums — never re-derived from the dates at read time, so a
+  // request's "cost" can't silently drift if date-math logic ever changes.
+  day_type: LeaveDayType;
+  days_count: number;
   // Only present on rows returned by getAllLeaveRequests(), which joins in
   // the requester's name for the Admin/Super Admin approval list.
   employee_name?: string;
@@ -106,6 +117,43 @@ export interface LeaveRequestMessage {
   sender_name: string;
   message: string;
   created_at: string;
+}
+
+// v3.0 (supabase_patch_22) — one employee's leave allocation for one
+// financial-year period, assignable by a Super Admin from either Manage
+// Roles or the Leave page. "financial_year" is a derived display label
+// (e.g. "2026-27"), not a free-typed field — see financialYearLabel() in
+// leaveBalanceActions.ts.
+export interface LeaveBalance {
+  id: string;
+  employee_id: string;
+  financial_year: string;
+  period_start: string;
+  period_end: string;
+  annual_total: number;
+  sick_total: number;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Computed, not stored — what the /leave metric cards and the admin
+// balance-editor both render. isDefaultBalance=true means no Super Admin
+// has assigned a real leave_balances row covering "today" yet, so the
+// fallback policy (13 annual / 8 sick, standard Apr–Mar financial year)
+// is being shown instead of a persisted one.
+export interface LeaveSummary {
+  financial_year: string;
+  period_start: string;
+  period_end: string;
+  isDefaultBalance: boolean;
+  annual_total: number;
+  annual_used: number;
+  sick_total: number;
+  sick_used: number;
+  unpaid_used: number;
+  other_used: number;
 }
 
 export type ProjectType = "Energy Modelling" | "BIM and AutoCad";
@@ -230,8 +278,8 @@ export interface SessionPayload {
 
 // Employee document portal (brief section 6, pulled forward). Strictly
 // private: a document is only ever visible to its own employee_id and to
-// a Super Admin — see requireDocumentAccess in session.ts. A plain Admin
-// gets none of this, by design.
+// a Super Admin or Accountant — see canAccessEmployeeDocuments in
+// session.ts. A plain Admin gets none of this, by design.
 export type DocumentCategory =
   | "salary_slip"
   | "offer_letter"
@@ -244,11 +292,27 @@ export type DocumentCategory =
   | "bank_document"
   | "other";
 
+// v3.0 (supabase_patch_24) — a user-named folder inside one employee's
+// document space. Abeer, 2026-11-27: "create a folder and name that
+// folder and we can go inside that folder and upload the document" —
+// replaces the fixed category dropdown below, which is kept only for
+// documents uploaded before this patch.
+export interface DocumentFolder {
+  id: string;
+  employee_id: string;
+  name: string;
+  created_by: string;
+  created_at: string;
+}
+
 export interface EmployeeDocument {
   id: string;
   employee_id: string;
   uploaded_by: string;
-  category: DocumentCategory;
+  // Legacy-only going forward: new uploads no longer collect a category
+  // (folder_id replaces it) and insert this as null.
+  category: DocumentCategory | null;
+  folder_id: string | null;
   title: string;
   storage_path: string;
   file_name: string;

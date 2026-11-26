@@ -217,6 +217,26 @@ body {
   background: transparent;
 }
 
+/* Abeer, 2026-11-27: "if the days are more then shown a small scroller
+   there" (the leave form's Day-by-Day box) — vertical counterpart to
+   .scrollbar-x-thin above. .scrollbar-thin (confusingly) hides the
+   scrollbar entirely, fine for a list that's an obvious scroll area but
+   wrong here: a short fixed-height box of form rows looks like it simply
+   ran out of content, with no cue more is hiding below. */
+.scrollbar-y-thin {
+  scrollbar-width: thin; /* Firefox */
+}
+.scrollbar-y-thin::-webkit-scrollbar {
+  width: 8px;
+}
+.scrollbar-y-thin::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 999px;
+}
+.scrollbar-y-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 @layer utilities {
   .text-balance {
     text-wrap: balance;

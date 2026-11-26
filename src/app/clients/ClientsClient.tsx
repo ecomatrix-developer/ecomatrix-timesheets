@@ -91,7 +91,7 @@ export default function ClientsClient({ clients }: { clients: Client[] }) {
         key={client.id}
         initial={{ opacity: 0, y: -6 }}
         animate={{ opacity: 1, y: 0 }}
-        className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${
+        className={`flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 ${
           client.active ? "border-gray-200 bg-white" : "border-gray-200 bg-gray-50 opacity-70"
         }`}
       >
@@ -100,13 +100,13 @@ export default function ClientsClient({ clients }: { clients: Client[] }) {
             <input
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
-              className="glass-input flex-1 px-3 py-1.5 text-sm"
+              className="glass-input min-w-0 flex-1 basis-32 px-3 py-1.5 text-sm"
               placeholder="Client name"
             />
             <input
               value={editShortCode}
               onChange={(e) => setEditShortCode(e.target.value)}
-              className="glass-input w-28 px-3 py-1.5 text-sm"
+              className="glass-input w-24 shrink-0 px-3 py-1.5 text-sm"
               placeholder="Short code"
             />
             <button
@@ -165,7 +165,7 @@ export default function ClientsClient({ clients }: { clients: Client[] }) {
   }
 
   return (
-    <div className="w-full max-w-3xl">
+    <div className="w-full">
       <h1 className="text-2xl font-semibold mb-1 flex items-center gap-2">
         <FaBuilding className="text-accent" /> Clients
       </h1>
@@ -174,8 +174,11 @@ export default function ClientsClient({ clients }: { clients: Client[] }) {
         from the Create/Edit Project picker without touching any project that already uses it.
       </p>
 
-      <form onSubmit={handleCreate} className="glass p-4 mb-6 flex flex-col gap-3 sm:flex-row sm:items-end">
-        <div className="flex-1">
+      <form
+        onSubmit={handleCreate}
+        className="glass p-4 mb-6 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_12rem_auto] sm:items-end"
+      >
+        <div>
           <label className="text-xs text-muted block mb-1">Client Name</label>
           <input
             value={name}
@@ -184,7 +187,7 @@ export default function ClientsClient({ clients }: { clients: Client[] }) {
             className="glass-input w-full px-3 py-2.5 text-sm"
           />
         </div>
-        <div className="sm:w-40">
+        <div>
           <label className="text-xs text-muted block mb-1">Short Code</label>
           <input
             value={shortCode}
@@ -196,24 +199,25 @@ export default function ClientsClient({ clients }: { clients: Client[] }) {
         <button
           type="submit"
           disabled={pending}
-          className="btn-primary inline-flex items-center gap-2 px-4 py-2.5 text-sm shrink-0 disabled:opacity-50"
+          className="btn-primary inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm shrink-0 disabled:opacity-50"
         >
           <FaPlus className="h-3 w-3" /> <FaSave className="h-3 w-3" /> Add Client
         </button>
       </form>
 
-      <div className="flex flex-col gap-2">
-        {clients.length === 0 && (
-          <div className="glass p-10 text-center text-muted">
-            <FaBuilding className="mx-auto mb-3 h-8 w-8 text-gray-300" />
-            No clients yet — add the first one above.
-          </div>
-        )}
-        <AnimatePresence initial={false}>
-          {activeClients.map(renderRow)}
-          {inactiveClients.map(renderRow)}
-        </AnimatePresence>
-      </div>
+      {clients.length === 0 ? (
+        <div className="glass p-10 text-center text-muted">
+          <FaBuilding className="mx-auto mb-3 h-8 w-8 text-gray-300" />
+          No clients yet — add the first one above.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <AnimatePresence initial={false}>
+            {activeClients.map(renderRow)}
+            {inactiveClients.map(renderRow)}
+          </AnimatePresence>
+        </div>
+      )}
     </div>
   );
 }

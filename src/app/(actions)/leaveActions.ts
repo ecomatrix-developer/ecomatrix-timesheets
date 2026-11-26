@@ -4,6 +4,9 @@ import { revalidatePath, revalidateTag } from "next/cache";
 import { requireSession, isSuperAdminOnly } from "@/lib/session";
 import { getLeaveRequestById } from "@/lib/data";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { sendHtmlEmail } from "@/lib/mailer";
+import { buildLeaveRequestEmail } from "@/lib/emailTemplates";
+import { enumerateDateRange } from "@/lib/leavePolicy";
 import type { LeaveType } from "@/lib/types";
 
 const LEAVE_TYPES: LeaveType[] = ["sick", "casual", "annual", "unpaid", "other"];
@@ -11,6 +14,81 @@ const LEAVE_TYPES: LeaveType[] = ["sick", "casual", "annual", "unpaid", "other"]
 export interface LeaveRequestState {
   error?: string;
   success?: boolean;
+}
+
+interface DayPlanInput {
+  date: string;
+  leave_type: unknown;
+  half: unknown;
+}
+
+interface DaySegment {
+  startDate: string;
+  endDate: string;
+  leaveType: LeaveType;
+  daysCount: number;
+  half: boolean;
+}
+
+/**
+ * Abeer, 2026-11-27: "along with the type add that sick annual unpaid so
+ * that they can select on which day they need to take which leave" — each
+ * date in the picked range can now have its own leave type and its own
+ * half/full flag, so one form submission can turn into several
+ * leave_requests rows: one per contiguous run of dates sharing BOTH the
+ * same leave type AND the same half/full flag. Re-derives everything from
+ * the actual date range server side rather than trusting the client's
+ * grouping/totals — same reasoning as the past-date guard below.
+ *
+ * Abeer, 2026-11-27 (follow-up): "on calender its not showing proper half
+ * day and full day" — this used to group by leave type alone, so a single
+ * half day in the middle of an otherwise-full range got silently merged
+ * into one row spanning the whole range with one aggregate days_count,
+ * and the calendar had no way to tell which specific day inside it was
+ * actually half. Splitting on the half flag too means every row is either
+ * "every day in this range is full" or "every day in this range is
+ * half" — never a mix — so the calendar can correctly infer which from
+ * days_count alone (see isWhollyHalfDayRow in leavePolicy.ts).
+ */
+function buildSegments(startDate: string, endDate: string, rawDayPlans: unknown): DaySegment[] | { error: string } {
+  if (!Array.isArray(rawDayPlans)) return { error: "Missing day-by-day leave selections." };
+
+  const validDates = enumerateDateRange(startDate, endDate);
+  const byDate = new Map<string, { leaveType: LeaveType; half: boolean }>();
+  for (const raw of rawDayPlans as DayPlanInput[]) {
+    if (!raw || typeof raw.date !== "string") continue;
+    if (!validDates.includes(raw.date)) continue; // outside the picked range — ignore, don't trust
+    if (typeof raw.leave_type !== "string" || !LEAVE_TYPES.includes(raw.leave_type as LeaveType)) continue;
+    byDate.set(raw.date, { leaveType: raw.leave_type as LeaveType, half: raw.half === true });
+  }
+
+  // Every date in the range must have a valid plan — a gap means the
+  // client sent something malformed/tampered with, not a real request.
+  if (validDates.some((d) => !byDate.has(d))) {
+    return { error: "Each date in the range needs a leave type. Please try again." };
+  }
+
+  const segments: DaySegment[] = [];
+  for (const date of validDates) {
+    const plan = byDate.get(date)!;
+    const amount = plan.half ? 0.5 : 1;
+    const last = segments[segments.length - 1];
+    if (last && last.leaveType === plan.leaveType && last.half === plan.half && last.endDate < date) {
+      // Extends the current run only when it's truly the next calendar
+      // day after the run's last date — validDates is already a
+      // contiguous sequence, so this is always true in practice, but it's
+      // cheap insurance against ever silently merging non-adjacent dates.
+      const nextDay = new Date(`${last.endDate}T00:00:00Z`);
+      nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+      if (nextDay.toISOString().slice(0, 10) === date) {
+        last.endDate = date;
+        last.daysCount += amount;
+        continue;
+      }
+    }
+    segments.push({ startDate: date, endDate: date, leaveType: plan.leaveType, daysCount: amount, half: plan.half });
+  }
+  return segments;
 }
 
 /**
@@ -27,26 +105,47 @@ export async function createLeaveRequestAction(
 
   const startDate = String(formData.get("start_date") ?? "");
   const endDate = String(formData.get("end_date") ?? "");
-  const leaveType = String(formData.get("leave_type") ?? "other");
   const reason = String(formData.get("reason") ?? "").trim();
 
   if (!startDate || !endDate) {
     return { error: "Pick both a start and end date." };
   }
+  // Defense-in-depth for the same rule the date pickers already enforce
+  // client-side (2026-11-26: "the start must always be loaded as today so
+  // that no one selects ths day older") — India runs ahead of UTC, so a
+  // UTC "today" here is never later than the submitter's own local today.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  if (startDate < todayIso) {
+    return { error: "Start date can't be in the past." };
+  }
   if (endDate < startDate) {
     return { error: "End date can't be before the start date." };
   }
-  if (!LEAVE_TYPES.includes(leaveType as LeaveType)) {
-    return { error: "Invalid leave type." };
-  }
 
-  const { error } = await supabaseAdmin.from("leave_requests").insert({
-    employee_id: session.userId,
-    start_date: startDate,
-    end_date: endDate,
-    leave_type: leaveType,
-    reason: reason || null,
-  });
+  let rawDayPlans: unknown = [];
+  const rawField = formData.get("day_plans");
+  if (typeof rawField === "string" && rawField) {
+    try {
+      rawDayPlans = JSON.parse(rawField);
+    } catch {
+      return { error: "Could not read the day-by-day leave selections. Please try again." };
+    }
+  }
+  const segmentsResult = buildSegments(startDate, endDate, rawDayPlans);
+  if ("error" in segmentsResult) return { error: segmentsResult.error };
+  const segments = segmentsResult;
+
+  const { error } = await supabaseAdmin.from("leave_requests").insert(
+    segments.map((seg) => ({
+      employee_id: session.userId,
+      start_date: seg.startDate,
+      end_date: seg.endDate,
+      leave_type: seg.leaveType,
+      day_type: "full",
+      days_count: seg.daysCount,
+      reason: reason || null,
+    }))
+  );
   if (error) {
     if (error.code === "PGRST205") {
       return {
@@ -54,6 +153,39 @@ export async function createLeaveRequestAction(
       };
     }
     return { error: error.message };
+  }
+
+  // One notification email per segment (a request that mixes leave types
+  // across the range is really several distinct requests, each needing
+  // its own approval) — sent one after another rather than in parallel,
+  // same "awaited, not fire-and-forget" reasoning as contactActions.ts (a
+  // Vercel function can freeze right after returning, before an
+  // un-awaited send has actually gone out).
+  const submittedAt = new Date().toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" });
+  for (const seg of segments) {
+    const { subject, html, text } = buildLeaveRequestEmail({
+      employeeName: session.name,
+      employeeUsername: session.username,
+      startDate: seg.startDate,
+      endDate: seg.endDate,
+      dayType: seg.half ? "half" : "full",
+      daysCount: seg.daysCount,
+      leaveType: seg.leaveType,
+      reason,
+      submittedAt,
+    });
+    // TEMPORARY, Abeer 2026-11-27: "i need to test it last time completely
+    // so make it only abeergandhi2@gmail.com" — real recipients are
+    // normally getAdminAndSuperAdminEmails() (every Admin + Super Admin),
+    // overridden here to a single test address while this is being
+    // verified end-to-end. To revert: restore the
+    // getAdminAndSuperAdminEmails import above and replace the line below
+    // with
+    //   const recipients = await getAdminAndSuperAdminEmails().catch(() => []);
+    const recipients = ["abeergandhi2@gmail.com"];
+    if (recipients.length > 0) {
+      await sendHtmlEmail(recipients, subject, html, text).catch(() => {});
+    }
   }
 
   revalidatePath("/leave");

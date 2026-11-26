@@ -1,7 +1,8 @@
 import "server-only";
 import { unstable_cache } from "next/cache";
 import { supabaseAdmin } from "./supabaseAdmin";
-import type { BillingGroup, Client, ContactSubmission, ContactSubmissionMessage, EmployeeDocument, LeaveRequest, LeaveRequestMessage, Project, ProjectScope, PublicUser, Task, User } from "./types";
+import type { BillingGroup, Client, ContactSubmission, ContactSubmissionMessage, DocumentFolder, EmployeeDocument, LeaveBalance, LeaveRequest, LeaveRequestMessage, LeaveSummary, Project, ProjectScope, PublicUser, Task, User } from "./types";
+import { DEFAULT_ANNUAL_LEAVE_DAYS, DEFAULT_SICK_LEAVE_DAYS, financialYearForDate } from "./leavePolicy";
 
 export async function getAllUsers(): Promise<PublicUser[]> {
   const { data, error } = await supabaseAdmin
@@ -49,6 +50,38 @@ export const getAllUsersWithRoles = unstable_cache(getAllUsersWithRolesUncached,
   revalidate: 45,
   tags: ["users"],
 });
+
+// Same super_admin/admin resolution isSuperAdminOnly()/isAdminOrAbove() use
+// for a session, applied to a plain user row instead — access_level is
+// NULL for anyone not yet migrated onto the v3 role model, in which case
+// the old single-tier `role === "admin"` is the super-admin-equivalent.
+function rowIsSuperAdmin(u: Pick<PublicUser, "role" | "access_level">): boolean {
+  if (u.access_level) return u.access_level === "super_admin";
+  return u.role === "admin";
+}
+function rowIsAdminOrAbove(u: Pick<PublicUser, "role" | "access_level">): boolean {
+  if (u.access_level) return u.access_level === "admin" || u.access_level === "super_admin";
+  return u.role === "admin";
+}
+
+/**
+ * Real recipients for the Contact Us notification — Abeer, 2026-11-26:
+ * "for contact us form only superadmins will see that." Swapped in for
+ * TEST_NOTIFICATION_RECIPIENTS once email formatting was confirmed good.
+ */
+export async function getSuperAdminEmails(): Promise<string[]> {
+  const users = await getAllUsersWithRoles();
+  return users.filter(rowIsSuperAdmin).map((u) => u.email).filter((e): e is string => !!e);
+}
+
+/**
+ * Real recipients for the leave-request notification — Abeer, 2026-11-26:
+ * "make it now for leaves admins and superadmins will get the emails."
+ */
+export async function getAdminAndSuperAdminEmails(): Promise<string[]> {
+  const users = await getAllUsersWithRoles();
+  return users.filter(rowIsAdminOrAbove).map((u) => u.email).filter((e): e is string => !!e);
+}
 
 export async function getUserById(id: string): Promise<PublicUser | null> {
   const { data, error } = await supabaseAdmin
@@ -128,6 +161,51 @@ export const getDocumentCountsByEmployee = unstable_cache(getDocumentCountsByEmp
   revalidate: 45,
   tags: ["documents"],
 });
+
+// v3.0 (supabase_patch_24) — every folder in one employee's document
+// space, for the folder-browser UI in /manage_documents/[userId]. Busted
+// by the same "documents" tag as the functions above so a just-created/
+// deleted folder shows up immediately after router.refresh().
+const getDocumentFoldersForEmployeeUncached = async (employeeId: string): Promise<DocumentFolder[]> => {
+  const { data, error } = await supabaseAdmin
+    .from("document_folders")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .order("name");
+  if (error) {
+    if ((error as { code?: string }).code === "PGRST205") return [];
+    throw error;
+  }
+  return data as DocumentFolder[];
+};
+export const getDocumentFoldersForEmployee = unstable_cache(
+  getDocumentFoldersForEmployeeUncached,
+  ["document-folders-for-employee"],
+  { revalidate: 45, tags: ["documents"] }
+);
+
+export async function getDocumentFolderById(id: string): Promise<DocumentFolder | null> {
+  const { data, error } = await supabaseAdmin
+    .from("document_folders")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw error;
+  return data as DocumentFolder | null;
+}
+
+// Org-wide folder count, for the Accountant dashboard's stat tiles —
+// head-only count query, no rows fetched.
+export async function getTotalDocumentFolderCount(): Promise<number> {
+  const { count, error } = await supabaseAdmin
+    .from("document_folders")
+    .select("*", { count: "exact", head: true });
+  if (error) {
+    if ((error as { code?: string }).code === "PGRST205") return 0;
+    throw error;
+  }
+  return count ?? 0;
+}
 
 // Leave portal (MVP). Ordered newest first, same convention as documents.
 // Used only by /leave — safe to cache; every leave action (create, decide,
@@ -314,6 +392,127 @@ export const getLeaveRequestMessages = unstable_cache(getLeaveRequestMessagesUnc
   revalidate: 30,
   tags: ["leave-requests"],
 });
+
+// v3.0 (supabase_patch_22) — resolves the ONE leave_balances row covering
+// a given date (defaults to today) for one employee, or null if a Super
+// Admin hasn't assigned one yet (callers then fall back to the standard
+// 13/8 default policy — see getLeaveSummaryForEmployee below).
+export async function getLeaveBalanceForEmployee(
+  employeeId: string,
+  onDateIso?: string
+): Promise<LeaveBalance | null> {
+  const onDate = onDateIso ?? new Date().toISOString().slice(0, 10);
+  const { data, error } = await supabaseAdmin
+    .from("leave_balances")
+    .select("*")
+    .eq("employee_id", employeeId)
+    .lte("period_start", onDate)
+    .gte("period_end", onDate)
+    .order("period_start", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    if ((error as { code?: string }).code === "PGRST205") return null;
+    throw error;
+  }
+  return data as LeaveBalance | null;
+}
+
+// Admin list views (Manage Roles, the Leave page's balance-editor panel)
+// — every employee's CURRENT (covering today) assigned balance in one
+// query, keyed by employee_id. An employee missing from the result just
+// hasn't been assigned one yet — the UI falls back to the 13/8 default
+// for them. Safe to cache: busted by upsertLeaveBalanceAction.
+const getCurrentLeaveBalancesByEmployeeUncached = async (): Promise<Record<string, LeaveBalance>> => {
+  const today = new Date().toISOString().slice(0, 10);
+  const { data, error } = await supabaseAdmin
+    .from("leave_balances")
+    .select("*")
+    .lte("period_start", today)
+    .gte("period_end", today);
+  if (error) {
+    if ((error as { code?: string }).code === "PGRST205") return {};
+    throw error;
+  }
+  const result: Record<string, LeaveBalance> = {};
+  for (const row of (data ?? []) as LeaveBalance[]) {
+    result[row.employee_id] = row;
+  }
+  return result;
+};
+export const getCurrentLeaveBalancesByEmployee = unstable_cache(
+  getCurrentLeaveBalancesByEmployeeUncached,
+  ["current-leave-balances-by-employee"],
+  { revalidate: 60, tags: ["leave-balances"] }
+);
+
+interface LeaveBalancePeriod {
+  financial_year: string;
+  period_start: string;
+  period_end: string;
+  isDefaultBalance: boolean;
+  annual_total: number;
+  sick_total: number;
+}
+
+function defaultLeaveBalancePeriod(): LeaveBalancePeriod {
+  const { start, end, label } = financialYearForDate();
+  return {
+    financial_year: label,
+    period_start: start,
+    period_end: end,
+    isDefaultBalance: true,
+    annual_total: DEFAULT_ANNUAL_LEAVE_DAYS,
+    sick_total: DEFAULT_SICK_LEAVE_DAYS,
+  };
+}
+
+// The actual math behind the /leave metric cards: resolves the employee's
+// current balance (Super-Admin-assigned, or the default policy), then
+// sums days_count from their APPROVED requests whose start_date falls
+// inside that same financial-year period. Pending requests don't count
+// against the balance yet — only an approved request is a confirmed use
+// of leave. Deliberately NOT cached — it's read right after an approve/
+// reject decision or a new balance assignment, and a stale "remaining"
+// count on the employee's own page would be a confusing result to show.
+export async function getLeaveSummaryForEmployee(employeeId: string): Promise<LeaveSummary> {
+  const assigned = await getLeaveBalanceForEmployee(employeeId);
+  const base: LeaveBalancePeriod = assigned
+    ? {
+        financial_year: assigned.financial_year,
+        period_start: assigned.period_start,
+        period_end: assigned.period_end,
+        isDefaultBalance: false,
+        annual_total: assigned.annual_total,
+        sick_total: assigned.sick_total,
+      }
+    : defaultLeaveBalancePeriod();
+
+  const { data, error } = await supabaseAdmin
+    .from("leave_requests")
+    .select("leave_type, days_count")
+    .eq("employee_id", employeeId)
+    .eq("status", "approved")
+    .gte("start_date", base.period_start)
+    .lte("start_date", base.period_end);
+  // Tolerates supabase_patch_22 not having run yet (days_count column
+  // missing) — falls back to zero usage rather than 500ing the whole
+  // /leave page over a sub-feature that isn't set up yet.
+  if (error) return { ...base, annual_used: 0, sick_used: 0, unpaid_used: 0, other_used: 0 };
+
+  let annual_used = 0;
+  let sick_used = 0;
+  let unpaid_used = 0;
+  let other_used = 0;
+  for (const row of (data ?? []) as { leave_type: LeaveRequest["leave_type"]; days_count: number }[]) {
+    if (row.leave_type === "annual") annual_used += row.days_count;
+    else if (row.leave_type === "sick") sick_used += row.days_count;
+    else if (row.leave_type === "unpaid") unpaid_used += row.days_count;
+    else other_used += row.days_count; // casual + other
+  }
+
+  return { ...base, annual_used, sick_used, unpaid_used, other_used };
+}
 
 export async function getAllProjects(): Promise<Project[]> {
   const { data, error } = await supabaseAdmin

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useFormStatus } from "react-dom";
 import { useActionState } from "react";
@@ -14,10 +14,16 @@ import {
   FaHistory,
   FaChevronDown,
   FaCommentDots,
+  FaUmbrellaBeach,
+  FaThermometerHalf,
+  FaMoneyBillWave,
+  FaEdit,
 } from "react-icons/fa";
 import Select from "@/components/Select";
 import DatePicker from "@/components/DatePicker";
 import Modal from "@/components/Modal";
+import LeaveBalanceModal from "@/components/LeaveBalanceModal";
+import LeaveCalendar from "@/components/LeaveCalendar";
 import { toast } from "@/lib/toast";
 import {
   createLeaveRequestAction,
@@ -25,15 +31,72 @@ import {
   addLeaveRequestMessageAction,
   type LeaveRequestState,
 } from "@/app/(actions)/leaveActions";
-import type { LeaveRequest, LeaveRequestMessage, LeaveType } from "@/lib/types";
+import {
+  enumerateDateRange,
+  isWhollyHalfDayRow,
+  DEFAULT_ANNUAL_LEAVE_DAYS,
+  DEFAULT_SICK_LEAVE_DAYS,
+  financialYearForDate,
+} from "@/lib/leavePolicy";
+import type { LeaveRequest, LeaveRequestMessage, LeaveType, LeaveSummary, PublicUser, LeaveBalance } from "@/lib/types";
 
+// Abeer, 2026-11-26: "remove the casual from the dropdown", then
+// 2026-11-27: "remove the other option from the dropdown" — casual and
+// other both stay valid historical/db leave_types (existing rows,
+// LeaveCalendar colors) but neither is offered on the New Request form
+// anymore.
 const LEAVE_TYPE_OPTIONS: { value: LeaveType; label: string }[] = [
-  { value: "casual", label: "Casual" },
-  { value: "sick", label: "Sick" },
   { value: "annual", label: "Annual" },
+  { value: "sick", label: "Sick" },
   { value: "unpaid", label: "Unpaid" },
-  { value: "other", label: "Other" },
 ];
+const LEAVE_TYPE_LABEL: Record<string, string> = Object.fromEntries(
+  LEAVE_TYPE_OPTIONS.map((o) => [o.value, o.label])
+);
+
+/** Local (not UTC) yyyy-MM-dd — used to stop the date pickers at "today"
+ * in the user's own timezone, not wherever the server/UTC clock sits. */
+function toLocalIsoDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function MetricCard({
+  icon,
+  label,
+  used,
+  total,
+  accent,
+}: {
+  icon: ReactNode;
+  label: string;
+  used: number;
+  total?: number;
+  accent: string;
+}) {
+  const remaining = total !== undefined ? Math.max(total - used, 0) : null;
+  return (
+    <div className="glass p-4 relative overflow-hidden">
+      <div className={`absolute left-0 top-0 h-full w-1 ${accent}`} />
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className={`text-sm ${accent.replace("bg-", "text-")}`}>{icon}</span>
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</p>
+      </div>
+      {remaining !== null ? (
+        <>
+          <p className="text-2xl font-bold leading-none">{remaining}</p>
+          <p className="text-xs text-muted mt-1">
+            remaining · {used} used of {total}
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="text-2xl font-bold leading-none">{used}</p>
+          <p className="text-xs text-muted mt-1">days taken this year</p>
+        </>
+      )}
+    </div>
+  );
+}
 
 // Fixed "en-US" locale, not the runtime's default (undefined) — the
 // server and the browser can have different default locales (e.g. the
@@ -46,6 +109,15 @@ function formatDate(iso: string): string {
 
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+}
+
+// Abeer, 2026-11-27: "on calender its not showing proper half day and
+// full day" — the same fix as LeaveCalendar.tsx: day_type is always
+// "full" now (half/full is decided per date instead, see buildSegments in
+// leaveActions.ts), so these lists need to infer half-day from
+// days_count, not day_type, same as the calendar does.
+function isHalfDay(r: LeaveRequest): boolean {
+  return isWhollyHalfDayRow(r.start_date, r.end_date, r.days_count);
 }
 
 // Abeer, 2026-11-22: "the reply of super admin in the leave cant be
@@ -113,19 +185,33 @@ export default function LeaveClient({
   canDecide,
   threads,
   viewerId,
+  mySummary,
+  allUsers,
+  leaveBalances,
 }: {
   myRequests: LeaveRequest[];
   allRequests: LeaveRequest[];
   canDecide: boolean;
   threads: Record<string, LeaveRequestMessage[]>;
   viewerId: string;
+  mySummary: LeaveSummary | null;
+  allUsers: PublicUser[];
+  leaveBalances: Record<string, LeaveBalance>;
 }) {
   const router = useRouter();
   const initialState: LeaveRequestState = {};
   const [state, formAction] = useActionState(createLeaveRequestAction, initialState);
-  const [leaveType, setLeaveType] = useState<LeaveType>("casual");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  // Abeer, 2026-11-27: "when we choose the date range... it should ask us
+  // the options for each range like half day or full day" (2026-11-27),
+  // then "along with the type add that sick annual unpaid so that they can
+  // select on which day they need to take which leave" — each date in the
+  // picked range gets its own leave type AND its own half/full toggle,
+  // keyed by "yyyy-MM-dd".
+  const [dayPlans, setDayPlans] = useState<Record<string, { leaveType: LeaveType; half: boolean }>>({});
+  const todayIso = toLocalIsoDate(new Date());
+  const [balanceTarget, setBalanceTarget] = useState<PublicUser | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const lastState = useRef<LeaveRequestState>(initialState);
   const [deciding, setDeciding] = useState<string | null>(null);
@@ -153,6 +239,91 @@ export default function LeaveClient({
 
   const pendingRequests = allRequests.filter((r) => r.status === "pending");
 
+  // Abeer, 2026-11-26: "instead show the real count 8/13 ... so that we
+  // can see the complete quick insight there" — the balances table used
+  // to show only the assigned totals with no sense of how much each
+  // employee had actually used. Same used/total math as the employee's
+  // own metric cards (getLeaveSummaryForEmployee in data.ts: approved
+  // requests whose start_date falls inside that employee's current
+  // balance period), just computed client-side from allRequests so this
+  // table doesn't need its own per-employee round trip.
+  const usageByEmployee = useMemo(() => {
+    const defaultPeriod = financialYearForDate();
+    const result: Record<string, { annualUsed: number; sickUsed: number }> = {};
+    for (const u of allUsers) {
+      const bal = leaveBalances[u.id];
+      const periodStart = bal ? bal.period_start : defaultPeriod.start;
+      const periodEnd = bal ? bal.period_end : defaultPeriod.end;
+      let annualUsed = 0;
+      let sickUsed = 0;
+      for (const r of allRequests) {
+        if (r.employee_id !== u.id || r.status !== "approved") continue;
+        if (r.start_date < periodStart || r.start_date > periodEnd) continue;
+        if (r.leave_type === "annual") annualUsed += r.days_count;
+        else if (r.leave_type === "sick") sickUsed += r.days_count;
+      }
+      result[u.id] = { annualUsed, sickUsed };
+    }
+    return result;
+  }, [allUsers, allRequests, leaveBalances]);
+
+  // Abeer, 2026-11-27: "remove this day type because anyways we are
+  // selecting them from below" — the separate Full/Half Day dropdown is
+  // gone; every request (single date or a range) is submitted as "full"
+  // day_type, and the per-day Day-by-Day list below (shown even for a
+  // single-date range, i.e. start === end) is the only place half vs full
+  // — and now leave type too — gets picked, for every date including a
+  // lone one.
+  const rangeDates = startDate && endDate && endDate >= startDate ? enumerateDateRange(startDate, endDate) : [];
+
+  // Keeps dayPlans in sync with the (possibly just-changed) range: drops
+  // any entry no longer in range, and seeds a default ("annual", full day)
+  // for any new date — instead of silently carrying stale selections the
+  // user can no longer see or un-toggle, or rendering a blank row.
+  useEffect(() => {
+    if (rangeDates.length === 0) {
+      if (Object.keys(dayPlans).length > 0) setDayPlans({});
+      return;
+    }
+    setDayPlans((prev) => {
+      let changed = Object.keys(prev).length !== rangeDates.length;
+      const next: typeof prev = {};
+      for (const d of rangeDates) {
+        if (prev[d]) {
+          next[d] = prev[d];
+        } else {
+          next[d] = { leaveType: "annual", half: false };
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startDate, endDate]);
+
+  function setDayLeaveType(date: string, lt: LeaveType) {
+    setDayPlans((prev) => ({ ...prev, [date]: { leaveType: lt, half: prev[date]?.half ?? false } }));
+  }
+
+  function toggleDayHalf(date: string) {
+    setDayPlans((prev) => ({
+      ...prev,
+      [date]: { leaveType: prev[date]?.leaveType ?? "annual", half: !(prev[date]?.half ?? false) },
+    }));
+  }
+
+  // Per-leave-type day totals across the whole range — replaces the old
+  // single "this counts as N days" line, since different dates can now
+  // count against different balances (Annual vs Sick vs Unpaid) in the
+  // same submission.
+  const typeSummary: Partial<Record<LeaveType, number>> = {};
+  for (const d of rangeDates) {
+    const plan = dayPlans[d];
+    if (!plan) continue;
+    const amount = plan.half ? 0.5 : 1;
+    typeSummary[plan.leaveType] = (typeSummary[plan.leaveType] ?? 0) + amount;
+  }
+
   useEffect(() => {
     if (state === lastState.current) return;
     lastState.current = state;
@@ -160,9 +331,9 @@ export default function LeaveClient({
     else if (state?.success) {
       toast.success("Leave request submitted.");
       formRef.current?.reset();
-      setLeaveType("casual");
       setStartDate("");
       setEndDate("");
+      setDayPlans({});
       router.refresh();
     }
   }, [state, router]);
@@ -324,10 +495,42 @@ export default function LeaveClient({
       <h1 className="text-xl font-semibold mb-1 flex items-center gap-2">
         <FaCalendarAlt className="text-accent" /> Leave
       </h1>
-      <p className="text-sm text-muted mb-6">
+      <p className="text-sm text-muted mb-4">
         Submit a leave request below.{" "}
         {canDecide && "Pending requests from everyone are waiting below for your decision, with the complete history underneath."}
       </p>
+
+      {mySummary && (
+        <div className="mb-6">
+          {/* Abeer, 2026-11-27: "remove that metric card option... of
+              casual and others because its showing there" — Other/Casual
+              dropped since neither is offered on the form anymore (see
+              LEAVE_TYPE_OPTIONS above); mySummary.other_used can still be
+              nonzero from old historical rows, it just isn't surfaced
+              here. */}
+          <div className="grid grid-cols-3 gap-3">
+            <MetricCard
+              icon={<FaUmbrellaBeach />}
+              label="Annual / Earned"
+              used={mySummary.annual_used}
+              total={mySummary.annual_total}
+              accent="bg-blue-500"
+            />
+            <MetricCard
+              icon={<FaThermometerHalf />}
+              label="Sick"
+              used={mySummary.sick_used}
+              total={mySummary.sick_total}
+              accent="bg-rose-500"
+            />
+            <MetricCard icon={<FaMoneyBillWave />} label="Unpaid" used={mySummary.unpaid_used} accent="bg-gray-500" />
+          </div>
+          <p className="text-xs text-muted mt-2">
+            FY {mySummary.financial_year} ({mySummary.period_start} – {mySummary.period_end})
+            {mySummary.isDefaultBalance ? " · default allocation — ask your Super Admin to assign your real balance." : ""}
+          </p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-[22rem_1fr] gap-6 items-start">
         <form ref={formRef} action={formAction} className="glass-strong p-6 flex flex-col gap-4">
@@ -335,26 +538,92 @@ export default function LeaveClient({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-sm text-muted mb-1 block">Start Date</label>
-              <DatePicker value={startDate} onChange={setStartDate} name="start_date" required placeholder="Start date" />
+              <DatePicker value={startDate} onChange={setStartDate} name="start_date" required placeholder="Start date" minDate={todayIso} />
             </div>
             <div>
               <label className="text-sm text-muted mb-1 block">End Date</label>
-              <DatePicker value={endDate} onChange={setEndDate} name="end_date" required placeholder="End date" minDate={startDate || undefined} />
+              <DatePicker value={endDate} onChange={setEndDate} name="end_date" required placeholder="End date" minDate={startDate || todayIso} />
             </div>
           </div>
-          <div>
-            <label className="text-sm text-muted mb-1 block">Leave Type</label>
-            <Select value={leaveType} onChange={(v) => setLeaveType(v as LeaveType)} options={LEAVE_TYPE_OPTIONS} />
-            <input type="hidden" name="leave_type" value={leaveType} />
-          </div>
+          {/* Abeer, 2026-11-27: "along with the type add that sick annual
+              unpaid so that they can select on which day they need to take
+              which leave... remove that from below and add it there
+              itself so now redesign that box properly" — the single
+              whole-request Leave Type dropdown is gone; every date gets
+              its own leave type AND its own half/full toggle. A range that
+              mixes types (e.g. 2 annual days then 1 sick day) becomes one
+              request per contiguous same-type run — see
+              createLeaveRequestAction. */}
+          {rangeDates.length > 0 && (
+            <div>
+              <label className="text-sm text-muted mb-1 block">
+                Day-by-Day <span className="text-gray-400">(leave type + half/full, per date)</span>
+              </label>
+              <div className="rounded-lg border border-gray-200 divide-y divide-gray-100 max-h-56 overflow-y-auto scrollbar-y-thin">
+                {rangeDates.map((d) => {
+                  const plan = dayPlans[d] ?? { leaveType: "annual" as LeaveType, half: false };
+                  return (
+                    <div key={d} className="flex items-center gap-2 px-3 py-2">
+                      <span className="text-xs text-muted w-[4.5rem] shrink-0">{formatDate(d)}</span>
+                      <Select
+                        value={plan.leaveType}
+                        onChange={(v) => setDayLeaveType(d, v as LeaveType)}
+                        options={LEAVE_TYPE_OPTIONS}
+                        className="min-w-0 flex-1"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => toggleDayHalf(d)}
+                        className={`shrink-0 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors ${
+                          plan.half
+                            ? "border-amber-300 bg-amber-50 text-amber-700"
+                            : "border-gray-200 text-muted hover:bg-gray-50"
+                        }`}
+                      >
+                        {plan.half ? "½ day" : "Full day"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              <input
+                type="hidden"
+                name="day_plans"
+                value={JSON.stringify(
+                  rangeDates.map((d) => ({
+                    date: d,
+                    leave_type: dayPlans[d]?.leaveType ?? "annual",
+                    half: !!dayPlans[d]?.half,
+                  }))
+                )}
+              />
+            </div>
+          )}
           <div>
             <label className="text-sm text-muted mb-1 block">Reason</label>
             <textarea name="reason" rows={3} className="glass-input w-full px-3 py-2.5 text-sm" placeholder="Optional" />
           </div>
+          {Object.keys(typeSummary).length > 0 && (
+            <p className="text-xs text-accent font-medium -mt-1">
+              {Object.entries(typeSummary)
+                .map(([t, n]) => `${LEAVE_TYPE_LABEL[t] ?? t}: ${n} day${n === 1 ? "" : "s"}`)
+                .join(" · ")}
+            </p>
+          )}
           <SubmitButton />
         </form>
 
-        <div className="flex flex-col gap-6">
+        {/* Abeer, 2026-11-27: "taking the complete page for the leave msg
+            ... make it normal screen so that we can see the data properly
+            in a single screen not to scroll horizontally" — the real bug:
+            this is a CSS Grid column (the "1fr" track above), which
+            defaults to a content-based minimum width, not 0. A long
+            one-line reason/history string has a huge "don't-wrap" min
+            width, so the grid track (and the whole page) was stretching to
+            fit it instead of the text ever actually truncating. min-w-0
+            here overrides that default and lets every truncate/min-w-0
+            child below finally do its job. */}
+        <div className="min-w-0 flex flex-col gap-6">
           {canDecide && (
             <div className="glass !p-0 overflow-hidden flex flex-col">
               <div className="px-5 py-4 border-b border-gray-100">
@@ -375,6 +644,7 @@ export default function LeaveClient({
                         <p className="font-medium text-sm truncate">{r.employee_name}</p>
                         <p className="text-xs text-muted truncate">
                           {formatDate(r.start_date)} – {formatDate(r.end_date)} · {r.leave_type}
+                          {isHalfDay(r) ? " (half day)" : ""}
                           {r.reason ? ` · ${r.reason}` : ""}
                         </p>
                       </div>
@@ -424,6 +694,7 @@ export default function LeaveClient({
                           <p className="font-medium text-sm truncate">{r.employee_name}</p>
                           <p className="text-xs text-muted truncate">
                             {formatDate(r.start_date)} – {formatDate(r.end_date)} · {r.leave_type}
+                            {isHalfDay(r) ? " (half day)" : ""}
                             {r.reason ? ` · ${r.reason}` : ""}
                           </p>
                           <button
@@ -470,6 +741,7 @@ export default function LeaveClient({
                       </p>
                       <p className="text-xs text-muted truncate capitalize">
                         {r.leave_type}
+                        {isHalfDay(r) ? " (half day)" : ""}
                         {r.reason ? ` · ${r.reason}` : ""}
                       </p>
                       <button
@@ -494,6 +766,85 @@ export default function LeaveClient({
           </div>
         </div>
       </div>
+
+      {/* Abeer, 2026-11-27: "make it below only at top there will be that
+          form like how it was earlier then calender then insights so the
+          format would be earlier one" — back to the original order (form
+          + approval queues first, calendar + balances insight below). The
+          real fix for "where is the calendar" was the min-w-0 bug above,
+          not the ordering. */}
+      {canDecide && (
+        <div className="mt-6 flex flex-col gap-6">
+          <LeaveCalendar requests={allRequests} />
+
+          <div className="glass !p-0 overflow-hidden flex flex-col">
+            <div className="px-5 py-4 border-b border-gray-100">
+              <h2 className="font-semibold flex items-center gap-2">
+                <FaCalendarAlt className="text-accent h-4 w-4" /> Employee Leave Balances
+              </h2>
+              <p className="text-xs text-muted mt-0.5">
+                Assign each employee&apos;s annual/earned and sick totals for a financial-year period —
+                the same thing as the leave icon on Employees &amp; Roles.
+              </p>
+            </div>
+            <div className="overflow-x-auto scrollbar-x-thin">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-muted">
+                  <tr>
+                    <th className="px-4 py-2.5">Employee</th>
+                    <th className="px-4 py-2.5">FY</th>
+                    <th className="px-4 py-2.5">Annual / Earned (used/total)</th>
+                    <th className="px-4 py-2.5">Sick (used/total)</th>
+                    <th className="px-4 py-2.5"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {allUsers.map((u) => {
+                    const bal = leaveBalances[u.id];
+                    const annualTotal = bal ? bal.annual_total : DEFAULT_ANNUAL_LEAVE_DAYS;
+                    const sickTotal = bal ? bal.sick_total : DEFAULT_SICK_LEAVE_DAYS;
+                    const usage = usageByEmployee[u.id] ?? { annualUsed: 0, sickUsed: 0 };
+                    return (
+                      <tr key={u.id}>
+                        <td className="px-4 py-2.5 font-medium">{u.name}</td>
+                        <td className="px-4 py-2.5 text-muted">{bal ? bal.financial_year : <span className="italic">default</span>}</td>
+                        <td className="px-4 py-2.5">
+                          <span className={usage.annualUsed > annualTotal ? "font-semibold text-red-600" : ""}>
+                            {usage.annualUsed}
+                          </span>
+                          <span className="text-muted">/{annualTotal}</span>
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <span className={usage.sickUsed > sickTotal ? "font-semibold text-red-600" : ""}>
+                            {usage.sickUsed}
+                          </span>
+                          <span className="text-muted">/{sickTotal}</span>
+                        </td>
+                        <td className="px-4 py-2.5 text-right">
+                          <button
+                            onClick={() => setBalanceTarget(u)}
+                            title="Edit leave balance"
+                            className="p-1.5 rounded-lg text-accent hover:bg-accent/10 transition-colors"
+                          >
+                            <FaEdit className="h-3.5 w-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <LeaveBalanceModal
+        open={!!balanceTarget}
+        onClose={() => setBalanceTarget(null)}
+        employee={balanceTarget ? { id: balanceTarget.id, name: balanceTarget.name } : null}
+        initialBalance={balanceTarget ? leaveBalances[balanceTarget.id] ?? null : null}
+      />
 
       <Modal
         open={!!decisionTarget}

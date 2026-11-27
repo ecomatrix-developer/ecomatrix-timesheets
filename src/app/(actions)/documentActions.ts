@@ -5,6 +5,7 @@ import { revalidatePath, revalidateTag } from "next/cache";
 import { requireSession, requireSuperAdminOrAccountant, canAccessEmployeeDocuments } from "@/lib/session";
 import { getDocumentById, getDocumentFolderById } from "@/lib/data";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { MEDICAL_CERT_FOLDER_NAME } from "@/lib/leavePolicy";
 
 const BUCKET = "employee-documents";
 
@@ -174,6 +175,87 @@ export async function deleteDocumentFolderAction(
   revalidatePath(`/manage_documents/${folder.employee_id}`);
   revalidateTag("documents");
   return { success: true, message: "Folder deleted." };
+}
+
+/**
+ * Abeer, 2026-11-27: "medical certificate after 3 single sick days in a
+ * quarter... they need to upload the medical certificate from that time
+ * onwards and superadmins can see that document" — the one deliberate,
+ * narrow carve-out in an otherwise Super-Admin/Accountant-only document
+ * system: ANY employee can upload into their OWN "Medical Certificates"
+ * folder specifically (auto-created here the first time, never a general
+ * folder-creation grant), nothing else. Super Admin sees it automatically
+ * through the existing /manage_documents/[userId] folder browser — no new
+ * admin-side UI needed for "superadmins can see that document."
+ */
+export async function uploadMedicalCertificateAction(
+  _prevState: UploadDocumentState,
+  formData: FormData
+): Promise<UploadDocumentState> {
+  const session = await requireSession();
+
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) {
+    return { error: "Choose a file to upload." };
+  }
+  if (file.size > 15 * 1024 * 1024) {
+    return { error: "File is larger than the 15MB limit." };
+  }
+
+  let folderId: string;
+  const { data: existingFolder, error: findErr } = await supabaseAdmin
+    .from("document_folders")
+    .select("id")
+    .eq("employee_id", session.userId)
+    .eq("name", MEDICAL_CERT_FOLDER_NAME)
+    .maybeSingle();
+  if (findErr) {
+    if (findErr.code === "PGRST205") {
+      return { error: "The document portal hasn't been set up yet. Contact your developer, then try again." };
+    }
+    return { error: findErr.message };
+  }
+  if (existingFolder) {
+    folderId = existingFolder.id;
+  } else {
+    const { data: created, error: createErr } = await supabaseAdmin
+      .from("document_folders")
+      .insert({ employee_id: session.userId, name: MEDICAL_CERT_FOLDER_NAME, created_by: session.userId })
+      .select("id")
+      .single();
+    if (createErr) return { error: createErr.message };
+    folderId = created.id;
+  }
+
+  const storagePath = `${session.userId}/${randomUUID()}-${sanitizeFileName(file.name)}`;
+  const arrayBuffer = await file.arrayBuffer();
+  const { error: uploadError } = await supabaseAdmin.storage
+    .from(BUCKET)
+    .upload(storagePath, Buffer.from(arrayBuffer), {
+      contentType: file.type || "application/octet-stream",
+      upsert: false,
+    });
+  if (uploadError) return { error: uploadError.message };
+
+  const { error: insertError } = await supabaseAdmin.from("employee_documents").insert({
+    employee_id: session.userId,
+    uploaded_by: session.userId,
+    category: null,
+    folder_id: folderId,
+    title: file.name,
+    storage_path: storagePath,
+    file_name: file.name,
+    file_size: file.size,
+    mime_type: file.type || null,
+  });
+  if (insertError) {
+    await supabaseAdmin.storage.from(BUCKET).remove([storagePath]);
+    return { error: insertError.message };
+  }
+
+  revalidatePath("/leave");
+  revalidateTag("documents");
+  return { success: true };
 }
 
 /**

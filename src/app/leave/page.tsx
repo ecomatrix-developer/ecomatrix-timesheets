@@ -7,7 +7,9 @@ import {
   getLeaveSummaryForEmployee,
   getAllUsers,
   getCurrentLeaveBalancesByEmployee,
+  getMedicalCertificateStatusByEmployee,
 } from "@/lib/data";
+import { quarterRangeForDate } from "@/lib/leavePolicy";
 import PageTransition from "@/components/PageTransition";
 import LeaveClient from "./LeaveClient";
 import type { LeaveRequest, LeaveRequestMessage, LeaveSummary, PublicUser, LeaveBalance } from "@/lib/types";
@@ -41,11 +43,21 @@ export default async function LeavePage() {
   let mySummary: LeaveSummary | null = null;
   let allUsers: PublicUser[] = [];
   let leaveBalances: Record<string, LeaveBalance> = {};
+  // Abeer, 2026-11-27: "medical certificate after 3 single sick days in a
+  // quarter... superadmins can see that document" — computed for
+  // everyone, but only Super Admin gets the full org-wide map; a regular
+  // employee only ever learns their OWN status (myCertOnFile), never
+  // whether some other employee has filed one.
+  let medicalCertStatusByEmployee: Record<string, boolean> = {};
+  let myCertOnFile = false;
   try {
     [myRequests, mySummary] = await Promise.all([
       getLeaveRequestsForEmployee(session.userId),
       getLeaveSummaryForEmployee(session.userId),
     ]);
+    const quarter = quarterRangeForDate();
+    const certMap = await getMedicalCertificateStatusByEmployee(quarter.start).catch(() => ({}) as Record<string, boolean>);
+    myCertOnFile = certMap[session.userId] ?? false;
     if (canDecide) {
       [allRequests, threads, allUsers, leaveBalances] = await Promise.all([
         getAllLeaveRequests(),
@@ -54,6 +66,7 @@ export default async function LeavePage() {
         getAllUsers(),
         getCurrentLeaveBalancesByEmployee(),
       ]);
+      medicalCertStatusByEmployee = certMap;
     } else {
       threads = await getLeaveRequestMessages(myRequests.map((r) => r.id));
     }
@@ -73,6 +86,8 @@ export default async function LeavePage() {
         mySummary={mySummary}
         allUsers={allUsers}
         leaveBalances={leaveBalances}
+        medicalCertStatusByEmployee={medicalCertStatusByEmployee}
+        myCertOnFile={myCertOnFile}
       />
     </PageTransition>
   );

@@ -103,6 +103,12 @@ export interface LeaveRequest {
   // request's "cost" can't silently drift if date-math logic ever changes.
   day_type: LeaveDayType;
   days_count: number;
+  // v3.0 (supabase_patch_26) — true only for a leave entered directly by
+  // a Super Admin with no employee request behind it at all (e.g. "late
+  // coming for 3 days in a month"). Pre-approved at creation (decided_by/
+  // decided_at are the admin who added it), shown with an "Added by
+  // Admin" badge wherever a normal request's status badge would go.
+  added_by_admin?: boolean;
   // Only present on rows returned by getAllLeaveRequests(), which joins in
   // the requester's name for the Admin/Super Admin approval list.
   employee_name?: string;

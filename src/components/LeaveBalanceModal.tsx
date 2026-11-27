@@ -6,7 +6,7 @@ import Modal from "@/components/Modal";
 import DatePicker from "@/components/DatePicker";
 import { toast } from "@/lib/toast";
 import { upsertLeaveBalanceAction } from "@/app/(actions)/leaveBalanceActions";
-import { DEFAULT_ANNUAL_LEAVE_DAYS, DEFAULT_SICK_LEAVE_DAYS, financialYearForDate } from "@/lib/leavePolicy";
+import { DEFAULT_ANNUAL_LEAVE_DAYS, DEFAULT_SICK_LEAVE_DAYS, calendarYearForDate } from "@/lib/leavePolicy";
 import type { LeaveBalance } from "@/lib/types";
 import { FaCalendarCheck } from "react-icons/fa";
 
@@ -45,9 +45,13 @@ export default function LeaveBalanceModal({
       setAnnualTotal(String(initialBalance.annual_total));
       setSickTotal(String(initialBalance.sick_total));
     } else {
-      const fy = financialYearForDate();
-      setPeriodStart(fy.start);
-      setPeriodEnd(fy.end);
+      // Abeer, 2026-11-27: "Instead of financial year - we should call
+      // it calendar year 2026... overall it should be jan to dec" —
+      // suggests a plain Jan-Dec span now; still freely editable to
+      // whatever period the Super Admin actually wants to allot.
+      const cy = calendarYearForDate();
+      setPeriodStart(cy.start);
+      setPeriodEnd(cy.end);
       setAnnualTotal(String(DEFAULT_ANNUAL_LEAVE_DAYS));
       setSickTotal(String(DEFAULT_SICK_LEAVE_DAYS));
     }
@@ -81,13 +85,14 @@ export default function LeaveBalanceModal({
     <Modal open={open} onClose={onClose} title={`Leave balance — ${employee?.name ?? ""}`}>
       <div className="flex flex-col gap-4">
         <p className="text-sm text-muted">
-          Set this employee&apos;s annual/earned and sick leave totals for one financial-year
-          period. Approved leave requests within this period are subtracted automatically.
+          Set this employee&apos;s annual/earned and sick leave totals for one period (defaults to
+          the calendar year — edit the dates below for a different one). Approved leave requests
+          within this period are subtracted automatically.
         </p>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-sm text-muted mb-1 block">Period start</label>
-            <DatePicker value={periodStart} onChange={setPeriodStart} required placeholder="FY start date" />
+            <DatePicker value={periodStart} onChange={setPeriodStart} required placeholder="Period start date" />
           </div>
           <div>
             <label className="text-sm text-muted mb-1 block">Period end</label>
@@ -95,7 +100,7 @@ export default function LeaveBalanceModal({
               value={periodEnd}
               onChange={setPeriodEnd}
               required
-              placeholder="FY end date"
+              placeholder="Period end date"
               minDate={periodStart || undefined}
             />
           </div>

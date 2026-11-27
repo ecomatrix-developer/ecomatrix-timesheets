@@ -190,6 +190,92 @@ export async function createLeaveRequestAction(
   return { success: true };
 }
 
+interface AdminLeaveEntryInput {
+  date: unknown;
+  leave_type: unknown;
+  half: unknown;
+}
+
+/**
+ * Super Admin only — Abeer, 2026-11-27: "figure out a way to hard code a
+ * half day or full day leave for any employee for the ones formal
+ * request is not received. Ex - late coming for 3 days in a month, or
+ * any other scenario." Unlike createLeaveRequestAction, the dates here
+ * are each entered independently (not a contiguous start/end range) —
+ * "3 days in a month" are rarely consecutive — so this inserts one
+ * leave_requests row per date, already approved (there's no employee
+ * request behind it to decide), flagged added_by_admin so it's clearly
+ * labeled everywhere it shows up. No past-date guard: the whole point is
+ * recording something that already happened.
+ */
+export async function addLeaveForEmployeeAction(
+  employeeId: string,
+  _prevState: LeaveRequestState,
+  formData: FormData
+): Promise<LeaveRequestState> {
+  const session = await requireSession();
+  if (!isSuperAdminOnly(session)) {
+    return { error: "Only a Super Admin can add a leave entry for someone else." };
+  }
+  if (!employeeId) return { error: "Pick an employee." };
+
+  const reason = String(formData.get("reason") ?? "").trim();
+  let rawEntries: unknown = [];
+  const rawField = formData.get("entries");
+  if (typeof rawField === "string" && rawField) {
+    try {
+      rawEntries = JSON.parse(rawField);
+    } catch {
+      return { error: "Could not read the date entries. Please try again." };
+    }
+  }
+  if (!Array.isArray(rawEntries) || rawEntries.length === 0) {
+    return { error: "Add at least one date." };
+  }
+
+  const dateFormat = /^\d{4}-\d{2}-\d{2}$/;
+  const byDate = new Map<string, { leaveType: LeaveType; half: boolean }>();
+  for (const raw of rawEntries as AdminLeaveEntryInput[]) {
+    if (!raw || typeof raw.date !== "string" || !dateFormat.test(raw.date)) continue;
+    if (typeof raw.leave_type !== "string" || !LEAVE_TYPES.includes(raw.leave_type as LeaveType)) continue;
+    byDate.set(raw.date, { leaveType: raw.leave_type as LeaveType, half: raw.half === true });
+  }
+  if (byDate.size === 0) {
+    return { error: "Add at least one valid date." };
+  }
+
+  const nowIso = new Date().toISOString();
+  const { error } = await supabaseAdmin.from("leave_requests").insert(
+    [...byDate.entries()].map(([date, plan]) => ({
+      employee_id: employeeId,
+      start_date: date,
+      end_date: date,
+      leave_type: plan.leaveType,
+      day_type: "full",
+      days_count: plan.half ? 0.5 : 1,
+      status: "approved",
+      added_by_admin: true,
+      decided_by: session.userId,
+      decided_at: nowIso,
+      decision_note: reason || null,
+      reason: reason || null,
+    }))
+  );
+  if (error) {
+    if (error.code === "PGRST205") {
+      return { error: "This needs supabase_patch_26_admin_added_leave.sql run first. Contact your developer." };
+    }
+    if (error.code === "23503") {
+      return { error: "That employee no longer exists." };
+    }
+    return { error: error.message };
+  }
+
+  revalidatePath("/leave");
+  revalidateTag("leave-requests");
+  return { success: true };
+}
+
 /**
  * Super Admin only (fallback-aware) — Abeer, 2026-11-22: "make sure only
  * superadmins are able to see that, normal admins cant they can only

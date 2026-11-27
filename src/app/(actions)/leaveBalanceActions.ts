@@ -71,5 +71,9 @@ export async function upsertLeaveBalanceAction(
   revalidatePath("/leave");
   revalidatePath("/manage_roles");
   revalidateTag("leave-balances");
-  return { success: true, message: `Leave balance saved for FY ${financialYear}.` };
+  // Abeer, 2026-11-27: "Instead of financial year - we should call it
+  // calendar year 2026" — financial_year is still the internal DB label/
+  // uniqueness key (unchanged — see the function doc comment above), but
+  // nothing user-facing should call an arbitrary period "FY" anymore.
+  return { success: true, message: `Leave balance saved for ${periodStart} – ${periodEnd}.` };
 }

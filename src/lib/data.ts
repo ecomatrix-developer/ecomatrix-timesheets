@@ -2,7 +2,7 @@ import "server-only";
 import { unstable_cache } from "next/cache";
 import { supabaseAdmin } from "./supabaseAdmin";
 import type { BillingGroup, Client, ContactSubmission, ContactSubmissionMessage, DocumentFolder, EmployeeDocument, LeaveBalance, LeaveRequest, LeaveRequestMessage, LeaveSummary, Project, ProjectScope, PublicUser, Task, User } from "./types";
-import { DEFAULT_ANNUAL_LEAVE_DAYS, DEFAULT_SICK_LEAVE_DAYS, financialYearForDate } from "./leavePolicy";
+import { DEFAULT_ANNUAL_LEAVE_DAYS, DEFAULT_SICK_LEAVE_DAYS, calendarYearForDate, MEDICAL_CERT_FOLDER_NAME } from "./leavePolicy";
 
 export async function getAllUsers(): Promise<PublicUser[]> {
   const { data, error } = await supabaseAdmin
@@ -192,6 +192,43 @@ export async function getDocumentFolderById(id: string): Promise<DocumentFolder 
     .maybeSingle();
   if (error) throw error;
   return data as DocumentFolder | null;
+}
+
+// Abeer, 2026-11-27: "medical certificate after 3 single sick days in a
+// quarter... they need to upload the medical certificate... superadmins
+// can see that document" — every employee_id that has at least one
+// document in THEIR OWN "Medical Certificates" folder (supabase_patch_24
+// folders, MEDICAL_CERT_FOLDER_NAME) uploaded on or after quarterStart.
+// Deliberately NOT cached (same reasoning as getLeaveSummaryForEmployee:
+// read right after an upload, a stale "still missing" would be a
+// confusing, wrong-looking result).
+export async function getMedicalCertificateStatusByEmployee(quarterStart: string): Promise<Record<string, boolean>> {
+  const { data: folders, error: folderErr } = await supabaseAdmin
+    .from("document_folders")
+    .select("id, employee_id")
+    .eq("name", MEDICAL_CERT_FOLDER_NAME);
+  if (folderErr) {
+    if ((folderErr as { code?: string }).code === "PGRST205") return {};
+    throw folderErr;
+  }
+  if (!folders || folders.length === 0) return {};
+
+  const folderIds = folders.map((f) => f.id);
+  const employeeIdByFolder = new Map(folders.map((f) => [f.id, f.employee_id as string]));
+
+  const { data: docs, error: docErr } = await supabaseAdmin
+    .from("employee_documents")
+    .select("folder_id")
+    .in("folder_id", folderIds)
+    .gte("created_at", `${quarterStart}T00:00:00Z`);
+  if (docErr) throw docErr;
+
+  const result: Record<string, boolean> = {};
+  for (const d of (docs ?? []) as { folder_id: string }[]) {
+    const employeeId = employeeIdByFolder.get(d.folder_id);
+    if (employeeId) result[employeeId] = true;
+  }
+  return result;
 }
 
 // Org-wide folder count, for the Accountant dashboard's stat tiles —
@@ -455,8 +492,14 @@ interface LeaveBalancePeriod {
   sick_total: number;
 }
 
+// Abeer, 2026-11-27: "Instead of financial year - we should call it
+// calendar year 2026... overall it should be jan to dec" — only the
+// DEFAULT (nobody's explicitly assigned this employee a balance yet)
+// period changed; an employee with a real leave_balances row keeps
+// exactly whatever period_start/period_end a Super Admin allotted them,
+// untouched (see getLeaveBalanceForEmployee below).
 function defaultLeaveBalancePeriod(): LeaveBalancePeriod {
-  const { start, end, label } = financialYearForDate();
+  const { start, end, label } = calendarYearForDate();
   return {
     financial_year: label,
     period_start: start,

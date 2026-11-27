@@ -38,6 +38,45 @@ export function financialYearLabelForPeriodStart(periodStartIso: string): string
 }
 
 /**
+ * Abeer, 2026-11-27: "Instead of financial year - we should call it
+ * calendar year 2026... overall it should be jan to dec" — the DEFAULT
+ * leave period (whenever a Super Admin hasn't explicitly assigned one —
+ * see defaultLeaveBalancePeriod in data.ts) is now a plain Jan 1 – Dec 31
+ * calendar year instead of India's Apr–Mar financial year. An employee
+ * with a custom-assigned period (via LeaveBalanceModal) keeps exactly
+ * whatever period_start/period_end was explicitly allotted to them —
+ * "it will be from the users time period coz we have an option to allot
+ * leaves so it will be like that for them."
+ */
+export function calendarYearForDate(onDate: Date = new Date()): {
+  start: string;
+  end: string;
+  label: string;
+} {
+  const year = onDate.getUTCFullYear();
+  return {
+    start: `${year}-01-01`,
+    end: `${year}-12-31`,
+    label: `Calendar Year ${year}`,
+  };
+}
+
+/**
+ * True when [periodStart, periodEnd] is exactly one Jan 1 – Dec 31 span —
+ * lets display code say "Calendar Year 2026" only when that's actually
+ * true, and fall back to the plain date range for any other (e.g.
+ * custom-assigned) period.
+ */
+export function calendarYearLabelForPeriod(periodStart: string, periodEnd: string): string | null {
+  const startYear = periodStart.slice(0, 4);
+  const endYear = periodEnd.slice(0, 4);
+  if (periodStart.slice(5) === "01-01" && periodEnd.slice(5) === "12-31" && startYear === endYear) {
+    return `Calendar Year ${startYear}`;
+  }
+  return null;
+}
+
+/**
  * Inclusive calendar-day count between two "yyyy-MM-dd" strings (a single
  * day counts as 1, not 0). Shared by createLeaveRequestAction (the actual
  * days_count stored) and the New Request form's live preview, so the
@@ -119,4 +158,76 @@ export function sumApprovedDaysInRange(
     total += r.days_count;
   }
   return total;
+}
+
+// Abeer, 2026-11-27: "medical certificate after 3 single sick days in a
+// quarter" and "only 5 earned leaves gets carried forwarded." Reuses the
+// existing Documents feature (supabase_patch_24's folders) rather than a
+// new table — a well-known folder name per employee, auto-created the
+// first time uploadMedicalCertificateAction runs for them.
+export const MEDICAL_CERT_FOLDER_NAME = "Medical Certificates";
+export const MEDICAL_CERT_SICK_DAY_THRESHOLD = 3;
+export const ANNUAL_CARRY_FORWARD_CAP = 5;
+// "warning for too many too frequent leaves" — no number was given for
+// this one; this is my own working definition (documented here so it's
+// easy to tune): 4 or more SEPARATE approved leave requests inside any
+// trailing 30-day window counts as "too frequent." Flagged in the UI as
+// an explicit, named threshold rather than a buried magic number.
+export const FREQUENT_LEAVE_REQUEST_COUNT = 4;
+export const FREQUENT_LEAVE_WINDOW_DAYS = 30;
+
+/** "yyyy-MM-dd" -> which quarter it falls in, as ISO bounds + a "2026-Q3" label. */
+export function quarterRangeForDate(onDate: Date = new Date()): {
+  start: string;
+  end: string;
+  label: string;
+} {
+  const year = onDate.getUTCFullYear();
+  const q = Math.floor(onDate.getUTCMonth() / 3); // 0-3
+  const startMonth = q * 3 + 1;
+  const endMonth = startMonth + 2;
+  const lastDay = new Date(Date.UTC(year, endMonth, 0)).getUTCDate();
+  return {
+    start: `${year}-${String(startMonth).padStart(2, "0")}-01`,
+    end: `${year}-${String(endMonth).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`,
+    label: `${year}-Q${q + 1}`,
+  };
+}
+
+/**
+ * Sum of APPROVED sick days for one employee whose start_date falls
+ * inside [periodStart, periodEnd] — same shape as sumApprovedDaysInRange,
+ * just pre-filtered to "sick" so call sites (the quarterly medical-cert
+ * check) don't repeat the leave_type literal.
+ */
+export function sumApprovedSickDaysInRange(
+  requests: { employee_id: string; leave_type: string; status: string; start_date: string; days_count: number }[],
+  employeeId: string,
+  periodStart: string,
+  periodEnd: string
+): number {
+  return sumApprovedDaysInRange(requests, employeeId, "sick", periodStart, periodEnd);
+}
+
+/**
+ * Number of separate approved leave requests for one employee whose
+ * start_date falls in the trailing FREQUENT_LEAVE_WINDOW_DAYS days
+ * (inclusive) from `onDate` — the "too frequent" signal. Counts REQUESTS
+ * (rows), not days, since 5 one-day requests in a month reads as more
+ * disruptive than one 5-day request, even though both total 5 days.
+ */
+export function countRecentApprovedRequests(
+  requests: { employee_id: string; status: string; start_date: string }[],
+  employeeId: string,
+  onDate: Date = new Date()
+): number {
+  const end = onDate.toISOString().slice(0, 10);
+  const start = new Date(onDate.getTime() - FREQUENT_LEAVE_WINDOW_DAYS * 86400000).toISOString().slice(0, 10);
+  let count = 0;
+  for (const r of requests) {
+    if (r.employee_id !== employeeId || r.status !== "approved") continue;
+    if (r.start_date < start || r.start_date > end) continue;
+    count++;
+  }
+  return count;
 }

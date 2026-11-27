@@ -18,6 +18,12 @@ import {
   FaThermometerHalf,
   FaMoneyBillWave,
   FaEdit,
+  FaUserShield,
+  FaPlus,
+  FaTrash,
+  FaExclamationTriangle,
+  FaFileMedical,
+  FaUpload,
 } from "react-icons/fa";
 import Select from "@/components/Select";
 import DatePicker from "@/components/DatePicker";
@@ -29,14 +35,24 @@ import {
   createLeaveRequestAction,
   decideLeaveRequestAction,
   addLeaveRequestMessageAction,
+  addLeaveForEmployeeAction,
   type LeaveRequestState,
 } from "@/app/(actions)/leaveActions";
+import { uploadMedicalCertificateAction, type UploadDocumentState } from "@/app/(actions)/documentActions";
 import {
   enumerateDateRange,
   isWhollyHalfDayRow,
+  calendarYearForDate,
+  calendarYearLabelForPeriod,
+  quarterRangeForDate,
+  sumApprovedSickDaysInRange,
+  countRecentApprovedRequests,
   DEFAULT_ANNUAL_LEAVE_DAYS,
   DEFAULT_SICK_LEAVE_DAYS,
-  financialYearForDate,
+  MEDICAL_CERT_SICK_DAY_THRESHOLD,
+  ANNUAL_CARRY_FORWARD_CAP,
+  FREQUENT_LEAVE_REQUEST_COUNT,
+  FREQUENT_LEAVE_WINDOW_DAYS,
 } from "@/lib/leavePolicy";
 import type { LeaveRequest, LeaveRequestMessage, LeaveType, LeaveSummary, PublicUser, LeaveBalance } from "@/lib/types";
 
@@ -95,6 +111,50 @@ function MetricCard({
         </>
       )}
     </div>
+  );
+}
+
+function MedicalCertUploadButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      className="btn-primary inline-flex items-center gap-1.5 px-3 py-1.5 text-xs shrink-0"
+    >
+      <FaUpload className="h-3 w-3" /> {pending ? "Uploading…" : "Upload"}
+    </button>
+  );
+}
+
+// Abeer, 2026-11-27: "they need to upload the medical certificate from
+// that time onwards" — a small self-contained upload form, shown inline
+// in the banner below once an employee crosses the quarterly sick-day
+// threshold. Lands in their own "Medical Certificates" folder
+// (uploadMedicalCertificateAction auto-creates it) — Super Admin sees it
+// through the existing /manage_documents/[userId] folder browser.
+function MedicalCertUploadForm({ onUploaded }: { onUploaded: () => void }) {
+  const initialState: UploadDocumentState = {};
+  const [state, formAction] = useActionState(uploadMedicalCertificateAction, initialState);
+  const formRef = useRef<HTMLFormElement>(null);
+  const lastState = useRef<UploadDocumentState>(initialState);
+
+  useEffect(() => {
+    if (state === lastState.current) return;
+    lastState.current = state;
+    if (state?.error) toast.error(state.error);
+    else if (state?.success) {
+      toast.success("Medical certificate uploaded.");
+      formRef.current?.reset();
+      onUploaded();
+    }
+  }, [state, onUploaded]);
+
+  return (
+    <form ref={formRef} action={formAction} className="flex flex-wrap items-center gap-2 mt-2">
+      <input name="file" type="file" required className="glass-input min-w-0 flex-1 px-3 py-1.5 text-xs" />
+      <MedicalCertUploadButton />
+    </form>
   );
 }
 
@@ -164,6 +224,25 @@ function statusBadge(status: LeaveRequest["status"]) {
   );
 }
 
+// Abeer, 2026-11-27: "hard code a half day or full day leave for any
+// employee for the ones formal request is not received" — these entries
+// are pre-approved at creation, so the plain "approved" badge alone would
+// look exactly like a normal employee-submitted, Super-Admin-decided
+// request. This extra badge is what makes the difference visible
+// everywhere a request shows up.
+function requestBadges(r: LeaveRequest) {
+  return (
+    <div className="flex flex-col items-end gap-1 shrink-0">
+      {statusBadge(r.status)}
+      {r.added_by_admin && (
+        <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-violet-100 text-violet-700">
+          <FaUserShield className="h-2.5 w-2.5" /> Added by Admin
+        </span>
+      )}
+    </div>
+  );
+}
+
 function SubmitButton() {
   const { pending } = useFormStatus();
   return (
@@ -188,6 +267,8 @@ export default function LeaveClient({
   mySummary,
   allUsers,
   leaveBalances,
+  medicalCertStatusByEmployee,
+  myCertOnFile,
 }: {
   myRequests: LeaveRequest[];
   allRequests: LeaveRequest[];
@@ -197,6 +278,8 @@ export default function LeaveClient({
   mySummary: LeaveSummary | null;
   allUsers: PublicUser[];
   leaveBalances: Record<string, LeaveBalance>;
+  medicalCertStatusByEmployee: Record<string, boolean>;
+  myCertOnFile: boolean;
 }) {
   const router = useRouter();
   const initialState: LeaveRequestState = {};
@@ -228,6 +311,68 @@ export default function LeaveClient({
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [, startTransition] = useTransition();
 
+  // Abeer, 2026-11-27: "figure out a way to hard code a half day or full
+  // day leave for any employee for the ones formal request is not
+  // received. Ex - late coming for 3 days in a month" — Super-Admin-only
+  // modal: pick an employee, add however many individual dates (each with
+  // its own leave type + half/full), submit. Each date is independent, on
+  // purpose — "3 days in a month" are rarely consecutive.
+  interface AdminLeaveEntry {
+    date: string;
+    leaveType: LeaveType;
+    half: boolean;
+  }
+  const [addLeaveOpen, setAddLeaveOpen] = useState(false);
+  const [addLeaveEmployeeId, setAddLeaveEmployeeId] = useState("");
+  const [addLeaveEntries, setAddLeaveEntries] = useState<AdminLeaveEntry[]>([
+    { date: "", leaveType: "annual", half: false },
+  ]);
+  const [addLeaveReason, setAddLeaveReason] = useState("");
+  const [addLeavePending, startAddLeaveTransition] = useTransition();
+
+  function openAddLeaveModal() {
+    setAddLeaveEmployeeId("");
+    setAddLeaveEntries([{ date: "", leaveType: "annual", half: false }]);
+    setAddLeaveReason("");
+    setAddLeaveOpen(true);
+  }
+  function addEntryRow() {
+    setAddLeaveEntries((prev) => [...prev, { date: "", leaveType: "annual", half: false }]);
+  }
+  function updateEntryRow(index: number, patch: Partial<AdminLeaveEntry>) {
+    setAddLeaveEntries((prev) => prev.map((e, i) => (i === index ? { ...e, ...patch } : e)));
+  }
+  function removeEntryRow(index: number) {
+    setAddLeaveEntries((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== index) : prev));
+  }
+  function submitAddLeave() {
+    if (!addLeaveEmployeeId) {
+      toast.error("Pick an employee.");
+      return;
+    }
+    const validEntries = addLeaveEntries.filter((e) => e.date);
+    if (validEntries.length === 0) {
+      toast.error("Add at least one date.");
+      return;
+    }
+    startAddLeaveTransition(async () => {
+      const formData = new FormData();
+      formData.set("reason", addLeaveReason.trim());
+      formData.set(
+        "entries",
+        JSON.stringify(validEntries.map((e) => ({ date: e.date, leave_type: e.leaveType, half: e.half })))
+      );
+      const result = await addLeaveForEmployeeAction(addLeaveEmployeeId, {}, formData);
+      if (result.success) {
+        toast.success("Leave added.");
+        setAddLeaveOpen(false);
+        router.refresh();
+      } else {
+        toast.error(result.error ?? "Could not add leave.");
+      }
+    });
+  }
+
   function toggleExpand(id: string) {
     setExpandedIds((prev) => {
       const next = new Set(prev);
@@ -248,7 +393,7 @@ export default function LeaveClient({
   // balance period), just computed client-side from allRequests so this
   // table doesn't need its own per-employee round trip.
   const usageByEmployee = useMemo(() => {
-    const defaultPeriod = financialYearForDate();
+    const defaultPeriod = calendarYearForDate();
     const result: Record<string, { annualUsed: number; sickUsed: number }> = {};
     for (const u of allUsers) {
       const bal = leaveBalances[u.id];
@@ -266,6 +411,58 @@ export default function LeaveClient({
     }
     return result;
   }, [allUsers, allRequests, leaveBalances]);
+
+  // Abeer, 2026-11-27: three separate warning signals, all computed the
+  // same way usageByEmployee is (client-side from allRequests, no extra
+  // round trip):
+  //  - "medical certificate after 3 single sick days in a quarter"
+  //  - "warning for too many too frequent leaves"
+  //  - "only 5 earned leaves gets carried forwarded" (unused above that
+  //    lapse at year-end — a warning only, nothing here changes a stored
+  //    balance number)
+  const employeeWarnings = useMemo(() => {
+    const quarter = quarterRangeForDate();
+    const result: Record<
+      string,
+      { sickDaysThisQuarter: number; needsMedicalCert: boolean; recentRequestCount: number; isFrequent: boolean; carryForwardExcess: number }
+    > = {};
+    for (const u of allUsers) {
+      const sickDaysThisQuarter = sumApprovedSickDaysInRange(allRequests, u.id, quarter.start, quarter.end);
+      const recentRequestCount = countRecentApprovedRequests(allRequests, u.id);
+      const usage = usageByEmployee[u.id] ?? { annualUsed: 0, sickUsed: 0 };
+      const bal = leaveBalances[u.id];
+      const annualTotal = bal ? bal.annual_total : DEFAULT_ANNUAL_LEAVE_DAYS;
+      const annualRemaining = Math.max(annualTotal - usage.annualUsed, 0);
+      result[u.id] = {
+        sickDaysThisQuarter,
+        needsMedicalCert: sickDaysThisQuarter >= MEDICAL_CERT_SICK_DAY_THRESHOLD,
+        recentRequestCount,
+        isFrequent: recentRequestCount >= FREQUENT_LEAVE_REQUEST_COUNT,
+        carryForwardExcess: Math.max(annualRemaining - ANNUAL_CARRY_FORWARD_CAP, 0),
+      };
+    }
+    return result;
+  }, [allUsers, allRequests, leaveBalances, usageByEmployee]);
+
+  // employeeWarnings above only ever has entries when canDecide (allUsers/
+  // leaveBalances are both empty arrays for a regular employee — see
+  // page.tsx) — this is the same three signals, computed from data every
+  // viewer always has regardless of role (their OWN mySummary/myRequests),
+  // so the banners below work for everyone, not just what Super Admin sees
+  // in the Employee Leave Balances table.
+  const myWarnings = useMemo(() => {
+    if (!mySummary) return null;
+    const quarter = quarterRangeForDate();
+    const sickDaysThisQuarter = sumApprovedSickDaysInRange(myRequests, viewerId, quarter.start, quarter.end);
+    const recentRequestCount = countRecentApprovedRequests(myRequests, viewerId);
+    const annualRemaining = Math.max(mySummary.annual_total - mySummary.annual_used, 0);
+    return {
+      sickDaysThisQuarter,
+      needsMedicalCert: sickDaysThisQuarter >= MEDICAL_CERT_SICK_DAY_THRESHOLD,
+      isFrequent: recentRequestCount >= FREQUENT_LEAVE_REQUEST_COUNT,
+      carryForwardExcess: Math.max(annualRemaining - ANNUAL_CARRY_FORWARD_CAP, 0),
+    };
+  }, [mySummary, myRequests, viewerId]);
 
   // Abeer, 2026-11-27: "remove this day type because anyways we are
   // selecting them from below" — the separate Full/Half Day dropdown is
@@ -525,10 +722,49 @@ export default function LeaveClient({
             />
             <MetricCard icon={<FaMoneyBillWave />} label="Unpaid" used={mySummary.unpaid_used} accent="bg-gray-500" />
           </div>
+          {/* Abeer, 2026-11-27: "Instead of financial year - we should
+              call it calendar year 2026 or date range based on whats
+              applied to each employees calendar" — a custom-assigned
+              period keeps whatever date range was allotted (no forced
+              "Calendar Year" label unless it genuinely is one). */}
           <p className="text-xs text-muted mt-2">
-            FY {mySummary.financial_year} ({mySummary.period_start} – {mySummary.period_end})
+            {calendarYearLabelForPeriod(mySummary.period_start, mySummary.period_end) ??
+              `${mySummary.period_start} – ${mySummary.period_end}`}
             {mySummary.isDefaultBalance ? " · default allocation — ask your Super Admin to assign your real balance." : ""}
           </p>
+          {myWarnings && myWarnings.carryForwardExcess > 0 && (
+            <p className="text-xs text-amber-700 mt-1 flex items-center gap-1.5">
+              <FaExclamationTriangle className="h-3 w-3 shrink-0" />
+              {myWarnings.carryForwardExcess} unused Annual/Earned day
+              {myWarnings.carryForwardExcess === 1 ? "" : "s"} will lapse at year-end — only {ANNUAL_CARRY_FORWARD_CAP} days carry
+              forward.
+            </p>
+          )}
+          {myWarnings && myWarnings.needsMedicalCert && (
+            <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+              <p className="text-xs text-amber-800 flex items-center gap-1.5">
+                <FaFileMedical className="h-3 w-3 shrink-0" />
+                You&apos;ve taken {myWarnings.sickDaysThisQuarter} sick day
+                {myWarnings.sickDaysThisQuarter === 1 ? "" : "s"} this quarter.
+                {myCertOnFile
+                  ? " Your medical certificate is on file."
+                  : " Please upload a medical certificate."}
+              </p>
+              {!myCertOnFile && <MedicalCertUploadForm onUploaded={() => router.refresh()} />}
+            </div>
+          )}
+        </div>
+      )}
+
+      {canDecide && (
+        <div className="mb-4 flex justify-end">
+          <button
+            type="button"
+            onClick={openAddLeaveModal}
+            className="btn-ghost inline-flex items-center gap-2 px-4 py-2 text-sm"
+          >
+            <FaUserShield className="h-3.5 w-3.5" /> Add Leave for Employee
+          </button>
         </div>
       )}
 
@@ -714,7 +950,7 @@ export default function LeaveClient({
                           </button>
                           {expanded && renderTimeline(r)}
                         </div>
-                        {statusBadge(r.status)}
+                        {requestBadges(r)}
                       </div>
                     );
                   })
@@ -757,7 +993,7 @@ export default function LeaveClient({
                       </button>
                       {expanded && renderTimeline(r)}
                     </div>
-                    {statusBadge(r.status)}
+                    {requestBadges(r)}
                   </div>
                   );
                 })
@@ -783,8 +1019,9 @@ export default function LeaveClient({
                 <FaCalendarAlt className="text-accent h-4 w-4" /> Employee Leave Balances
               </h2>
               <p className="text-xs text-muted mt-0.5">
-                Assign each employee&apos;s annual/earned and sick totals for a financial-year period —
-                the same thing as the leave icon on Employees &amp; Roles.
+                Assign each employee&apos;s annual/earned and sick totals for a period — defaults to
+                the calendar year unless you&apos;ve allotted a custom one. Same thing as the leave
+                icon on Employees &amp; Roles.
               </p>
             </div>
             <div className="overflow-x-auto scrollbar-x-thin">
@@ -792,9 +1029,10 @@ export default function LeaveClient({
                 <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-muted">
                   <tr>
                     <th className="px-4 py-2.5">Employee</th>
-                    <th className="px-4 py-2.5">FY</th>
+                    <th className="px-4 py-2.5">Period</th>
                     <th className="px-4 py-2.5">Annual / Earned (used/total)</th>
                     <th className="px-4 py-2.5">Sick (used/total)</th>
+                    <th className="px-4 py-2.5">Flags</th>
                     <th className="px-4 py-2.5"></th>
                   </tr>
                 </thead>
@@ -804,10 +1042,18 @@ export default function LeaveClient({
                     const annualTotal = bal ? bal.annual_total : DEFAULT_ANNUAL_LEAVE_DAYS;
                     const sickTotal = bal ? bal.sick_total : DEFAULT_SICK_LEAVE_DAYS;
                     const usage = usageByEmployee[u.id] ?? { annualUsed: 0, sickUsed: 0 };
+                    const periodStart = bal ? bal.period_start : calendarYearForDate().start;
+                    const periodEnd = bal ? bal.period_end : calendarYearForDate().end;
+                    const periodLabel = calendarYearLabelForPeriod(periodStart, periodEnd) ?? `${periodStart} – ${periodEnd}`;
+                    const warn = employeeWarnings[u.id];
+                    const hasCert = medicalCertStatusByEmployee[u.id] ?? false;
                     return (
                       <tr key={u.id}>
                         <td className="px-4 py-2.5 font-medium">{u.name}</td>
-                        <td className="px-4 py-2.5 text-muted">{bal ? bal.financial_year : <span className="italic">default</span>}</td>
+                        <td className="px-4 py-2.5 text-muted whitespace-nowrap">
+                          {periodLabel}
+                          {!bal && <span className="italic"> (default)</span>}
+                        </td>
                         <td className="px-4 py-2.5">
                           <span className={usage.annualUsed > annualTotal ? "font-semibold text-red-600" : ""}>
                             {usage.annualUsed}
@@ -819,6 +1065,36 @@ export default function LeaveClient({
                             {usage.sickUsed}
                           </span>
                           <span className="text-muted">/{sickTotal}</span>
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <div className="flex flex-wrap gap-1">
+                            {warn?.needsMedicalCert && (
+                              <span
+                                title={`${warn.sickDaysThisQuarter} sick days this quarter`}
+                                className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                                  hasCert ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
+                                }`}
+                              >
+                                <FaFileMedical className="h-2.5 w-2.5" /> {hasCert ? "Cert on file" : "Cert needed"}
+                              </span>
+                            )}
+                            {warn?.isFrequent && (
+                              <span
+                                title={`${warn.recentRequestCount} approved requests in the last ${FREQUENT_LEAVE_WINDOW_DAYS} days`}
+                                className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700"
+                              >
+                                <FaExclamationTriangle className="h-2.5 w-2.5" /> Frequent
+                              </span>
+                            )}
+                            {warn && warn.carryForwardExcess > 0 && (
+                              <span
+                                title={`${warn.carryForwardExcess} unused day(s) will lapse at year-end — only ${ANNUAL_CARRY_FORWARD_CAP} carry forward`}
+                                className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-sky-100 text-sky-700"
+                              >
+                                <FaExclamationTriangle className="h-2.5 w-2.5" /> {warn.carryForwardExcess}d lapsing
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-2.5 text-right">
                           <button
@@ -838,6 +1114,93 @@ export default function LeaveClient({
           </div>
         </div>
       )}
+
+      <Modal open={addLeaveOpen} onClose={() => setAddLeaveOpen(false)} title="Add Leave for Employee">
+        <div className="flex flex-col gap-4">
+          <p className="text-xs text-muted -mt-1">
+            For leave with no formal request on file (e.g. late coming) — saved already approved,
+            labeled &quot;Added by Admin&quot; everywhere it shows up.
+          </p>
+          <div>
+            <label className="text-sm text-muted mb-1 block">Employee</label>
+            <Select
+              value={addLeaveEmployeeId}
+              onChange={setAddLeaveEmployeeId}
+              placeholder="-- Select Employee --"
+              options={allUsers.map((u) => ({ value: u.id, label: u.name }))}
+            />
+          </div>
+          <div>
+            <label className="text-sm text-muted mb-1 block">
+              Dates <span className="text-gray-400">(each one independent — don&apos;t need to be consecutive)</span>
+            </label>
+            <div className="flex flex-col gap-2">
+              {addLeaveEntries.map((entry, i) => (
+                <div key={i} className="flex flex-wrap items-center gap-2">
+                  <div className="w-36">
+                    <DatePicker value={entry.date} onChange={(v) => updateEntryRow(i, { date: v })} placeholder="Date" />
+                  </div>
+                  <Select
+                    value={entry.leaveType}
+                    onChange={(v) => updateEntryRow(i, { leaveType: v as LeaveType })}
+                    options={LEAVE_TYPE_OPTIONS}
+                    className="w-28"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => updateEntryRow(i, { half: !entry.half })}
+                    className={`shrink-0 px-2.5 py-2 rounded-lg text-xs font-medium border transition-colors ${
+                      entry.half ? "border-amber-300 bg-amber-50 text-amber-700" : "border-gray-200 text-muted hover:bg-gray-50"
+                    }`}
+                  >
+                    {entry.half ? "½ day" : "Full day"}
+                  </button>
+                  {addLeaveEntries.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeEntryRow(i)}
+                      className="shrink-0 p-2 rounded-lg text-red-600 hover:bg-red-50 transition-colors"
+                      title="Remove this date"
+                    >
+                      <FaTrash className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={addEntryRow}
+              className="btn-ghost mt-2 inline-flex items-center gap-2 px-3 py-1.5 text-xs"
+            >
+              <FaPlus className="h-3 w-3" /> Add Date
+            </button>
+          </div>
+          <div>
+            <label className="text-sm text-muted mb-1 block">Reason</label>
+            <textarea
+              value={addLeaveReason}
+              onChange={(e) => setAddLeaveReason(e.target.value)}
+              rows={2}
+              placeholder="e.g. Late coming — 3 occurrences this month"
+              className="glass-input w-full px-3 py-2 text-sm"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => setAddLeaveOpen(false)} className="btn-ghost px-4 py-2 text-sm">
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={submitAddLeave}
+              disabled={addLeavePending}
+              className="btn-primary inline-flex items-center gap-2 px-4 py-2 text-sm"
+            >
+              <FaCheck className="h-3.5 w-3.5" /> {addLeavePending ? "Adding…" : "Add Leave"}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       <LeaveBalanceModal
         open={!!balanceTarget}

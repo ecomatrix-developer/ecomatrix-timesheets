@@ -57,7 +57,15 @@ export default async function ReportsPage({
   const psSearch = (resolvedSearchParams.psSearch ?? "").trim().toLowerCase();
 
   const [users, projects] = await Promise.all([getAllUsers(), getAllProjects()]);
-  const employees = users.filter((u) => u.role === "employee");
+  // Abeer, 2026-11-27: "its not showing the admins and superadmins
+  // sheets" — the old `role === "employee"` filter used the legacy
+  // binary role column, which a DB trigger syncs to "admin" for every
+  // Admin AND Super Admin account (see types.ts's Role comment), so both
+  // tiers silently vanished from this picker even though they submit
+  // timesheets through the exact same /timesheet page as anyone else.
+  // Every account can appear here now; there's nothing left on `role` to
+  // usefully filter by.
+  const employees = users;
   const projectMap = toProjectMap(projects);
 
   let selectedEmployee = null as null | (typeof users)[number];

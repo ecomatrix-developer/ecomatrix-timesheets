@@ -4,14 +4,23 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import type { Project, ProjectScope, ProjectType } from "@/lib/types";
+import type { Client, Project, ProjectScope, ProjectType } from "@/lib/types";
+import type { SortKey } from "./page";
+import { RETIRED_SCOPE_NAMES } from "@/lib/projectCategories";
 import { PROJECT_STATUSES } from "@/lib/constants";
 import { deleteProjectAction } from "@/app/(actions)/projectActions";
 import Modal from "@/components/Modal";
+import Select from "@/components/Select";
 import Pagination from "@/components/Pagination";
 import { PAGE_SIZE } from "@/lib/constants";
 import { toast } from "@/lib/toast";
-import { FaPlus, FaSearch, FaTimes, FaEdit, FaTrash, FaFolderOpen } from "react-icons/fa";
+import { FaPlus, FaSearch, FaTimes, FaEdit, FaTrash, FaFolderOpen, FaSort, FaSortUp, FaSortDown } from "react-icons/fa";
+
+// Fixed "en-US" locale, not the runtime's default — avoids a hydration
+// mismatch between the server's and browser's default locale.
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
 
 const STATUS_COLORS: Record<string, string> = {
   active: "bg-emerald-100 text-emerald-700 border-emerald-200",
@@ -51,11 +60,15 @@ export default function ProjectsClient({
   selectedTypes,
   scopes = [],
   selectedScopes = [],
+  clients = [],
+  selectedClientId = null,
   scopeNamesByProject = {},
   searchTerm,
   page,
   totalPages,
   totalItems,
+  sortBy = "created_at",
+  sortAsc = false,
 }: {
   projects: Project[];
   selectedStatuses: string[];
@@ -64,17 +77,26 @@ export default function ProjectsClient({
   // as before for any caller that predates patch_9.
   scopes?: ProjectScope[];
   selectedScopes?: string[];
+  // Abeer, 2026-11-27: "in the projects page show the client filter so
+  // that we can select from client as well."
+  clients?: Client[];
+  selectedClientId?: string | null;
   scopeNamesByProject?: Record<string, string[]>;
   searchTerm: string;
   page: number;
   totalPages: number;
   totalItems: number;
+  // Abeer, 2026-11-27: "when we click the headers such as dates, project
+  // names, number it should do sorting."
+  sortBy?: SortKey;
+  sortAsc?: boolean;
 }) {
   const router = useRouter();
   const [search, setSearch] = useState(searchTerm);
   const [statuses, setStatuses] = useState<string[]>(selectedStatuses);
   const [types, setTypes] = useState<string[]>(selectedTypes);
   const [scopeFilter, setScopeFilter] = useState<string[]>(selectedScopes);
+  const [clientFilter, setClientFilter] = useState<string>(selectedClientId ?? "");
   const [pending, startTransition] = useTransition();
   const [toDelete, setToDelete] = useState<Project | null>(null);
   const useScopeFilter = scopes.length > 0;
@@ -86,11 +108,15 @@ export default function ProjectsClient({
   // is entirely absent from the URL — so once the user has touched the
   // status filter at all (even to clear every chip), we always include an
   // explicit (possibly empty) `status` marker to opt out of that default.
+  // The current sort always carries through (every caller already passes
+  // the live sortBy/sortAsc from props) so changing a filter never resets
+  // the column you just sorted by.
   function applyFilters(
     nextStatuses: string[],
     nextTypes: string[],
     nextSearch: string,
-    nextScopes: string[] = scopeFilter
+    nextScopes: string[] = scopeFilter,
+    nextClientId: string = clientFilter
   ) {
     const params = new URLSearchParams();
     if (nextStatuses.length > 0) {
@@ -100,7 +126,10 @@ export default function ProjectsClient({
     }
     nextTypes.forEach((t) => params.append("project_type", t));
     nextScopes.forEach((s) => params.append("scope", s));
+    if (nextClientId) params.set("client_id", nextClientId);
     if (nextSearch) params.set("search_term", nextSearch);
+    params.set("sort", sortBy);
+    params.set("dir", sortAsc ? "asc" : "desc");
     router.push(`/projects?${params.toString()}`);
     // Next's client router cache can otherwise serve a stale RSC response
     // for a (filters, page) combination visited earlier in this session.
@@ -116,10 +145,57 @@ export default function ProjectsClient({
     }
     types.forEach((t) => params.append("project_type", t));
     scopeFilter.forEach((s) => params.append("scope", s));
+    if (clientFilter) params.set("client_id", clientFilter);
     if (search) params.set("search_term", search);
     params.set("page", String(nextPage));
+    params.set("sort", sortBy);
+    params.set("dir", sortAsc ? "asc" : "desc");
     router.push(`/projects?${params.toString()}`);
     router.refresh();
+  }
+
+  function handleClientFilterChange(value: string) {
+    setClientFilter(value);
+    applyFilters(statuses, types, search, scopeFilter, value);
+  }
+
+  // Clicking the already-active column flips direction; clicking a new
+  // column starts ascending (A-Z / 1-2-3 reads naturally first), except
+  // Created At, where newest-first is the more useful first click.
+  function handleSort(column: SortKey) {
+    const nextAsc = column === sortBy ? !sortAsc : column === "created_at" ? false : true;
+    const params = new URLSearchParams();
+    if (statuses.length > 0) {
+      statuses.forEach((s) => params.append("status", s));
+    } else {
+      params.set("status", "");
+    }
+    types.forEach((t) => params.append("project_type", t));
+    scopeFilter.forEach((s) => params.append("scope", s));
+    if (clientFilter) params.set("client_id", clientFilter);
+    if (search) params.set("search_term", search);
+    params.set("sort", column);
+    params.set("dir", nextAsc ? "asc" : "desc");
+    router.push(`/projects?${params.toString()}`);
+    router.refresh();
+  }
+
+  function SortHeader({ column, label, className = "" }: { column: SortKey; label: string; className?: string }) {
+    const active = sortBy === column;
+    return (
+      <th className={`px-4 py-3 ${className}`}>
+        <button
+          type="button"
+          onClick={() => handleSort(column)}
+          className={`inline-flex items-center gap-1.5 hover:text-foreground transition-colors ${
+            active ? "text-foreground font-semibold" : ""
+          }`}
+        >
+          {label}
+          {active ? sortAsc ? <FaSortUp className="h-3 w-3" /> : <FaSortDown className="h-3 w-3" /> : <FaSort className="h-3 w-3 text-gray-300" />}
+        </button>
+      </th>
+    );
   }
 
   function toggleStatus(status: string) {
@@ -230,7 +306,7 @@ export default function ProjectsClient({
           <button type="submit" className="btn-ghost inline-flex items-center gap-2 px-4 py-2 text-sm">
             <FaSearch className="h-3 w-3" /> Search
           </button>
-          {(search || statuses.length > 0 || types.length > 0 || scopeFilter.length > 0) && (
+          {(search || statuses.length > 0 || types.length > 0 || scopeFilter.length > 0 || clientFilter) && (
             <button
               type="button"
               onClick={() => {
@@ -239,6 +315,7 @@ export default function ProjectsClient({
                 setStatuses([]);
                 setTypes([]);
                 setScopeFilter([]);
+                setClientFilter("");
                 // Explicit empty `status` marker: "cleared", not "untouched"
                 // — otherwise the page would fall back to its active-only
                 // default instead of actually showing every status.
@@ -273,63 +350,91 @@ export default function ProjectsClient({
             })}
           </div>
         </div>
-        <div className="pt-2 border-t border-gray-100">
-          <span className="text-xs text-muted font-medium mb-1.5 block">
-            Filter by Category / Type:
-          </span>
-          <div className="flex flex-wrap gap-2">
-            {/* v3.0: once scopes exist (supabase_patch_9), filter by the
-                real DB-driven category — Energy, BIM - Revit, BIM - CAD,
-                Marketing & BD, etc. — instead of the old flat project_type,
-                which otherwise hides Marketing & BD under "BIM and AutoCad".
-                Falls back to the original 2 project_type chips, byte-for-
-                byte, until that migration has run. */}
-            {useScopeFilter
-              ? scopes.map((s) => {
-                  const active = scopeFilter.includes(s.name);
-                  return (
-                    <button
-                      key={s.id}
-                      onClick={() => toggleScopeFilter(s.name)}
-                      className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                        active
-                          ? scopeBadgeClass(s.name)
-                          : "border-gray-200 text-muted hover:text-foreground bg-white"
-                      }`}
-                    >
-                      {s.name}
-                    </button>
-                  );
-                })
-              : PROJECT_TYPES.map((type) => {
-                  const active = types.includes(type);
-                  return (
-                    <button
-                      key={type}
-                      onClick={() => toggleType(type)}
-                      className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                        active
-                          ? TYPE_COLORS[type]
-                          : "border-gray-200 text-muted hover:text-foreground bg-white"
-                      }`}
-                    >
-                      {type}
-                    </button>
-                  );
-                })}
+        <div className="pt-2 border-t border-gray-100 flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <span className="text-xs text-muted font-medium mb-1.5 block">
+              Filter by Category / Type:
+            </span>
+            <div className="flex flex-wrap gap-2">
+              {/* v3.0: once scopes exist (supabase_patch_9), filter by the
+                  real DB-driven category — Energy, BIM - Revit, BIM - CAD,
+                  Marketing & BD, etc. — instead of the old flat project_type,
+                  which otherwise hides Marketing & BD under "BIM and AutoCad".
+                  Falls back to the original 2 project_type chips, byte-for-
+                  byte, until that migration has run. */}
+              {useScopeFilter
+                ? scopes
+                    .filter((s) => !RETIRED_SCOPE_NAMES.has(s.name))
+                    .map((s) => {
+                      const active = scopeFilter.includes(s.name);
+                      return (
+                        <button
+                          key={s.id}
+                          onClick={() => toggleScopeFilter(s.name)}
+                          className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                            active
+                              ? scopeBadgeClass(s.name)
+                              : "border-gray-200 text-muted hover:text-foreground bg-white"
+                          }`}
+                        >
+                          {s.name}
+                        </button>
+                      );
+                    })
+                : PROJECT_TYPES.map((type) => {
+                    const active = types.includes(type);
+                    return (
+                      <button
+                        key={type}
+                        onClick={() => toggleType(type)}
+                        className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                          active
+                            ? TYPE_COLORS[type]
+                            : "border-gray-200 text-muted hover:text-foreground bg-white"
+                        }`}
+                      >
+                        {type}
+                      </button>
+                    );
+                  })}
+            </div>
           </div>
+          {/* Abeer, 2026-11-27: "the client filter make it proper font and
+              formatting as per the project filter and make it to right
+              side in the existing row not a new row" — same label
+              convention as Category/Type, same row, right-aligned; a
+              dropdown rather than a pill bar since the client list can
+              grow unbounded, unlike the small fixed set of statuses/types. */}
+          {clients.length > 0 && (
+            <div className="min-w-0 w-full sm:w-auto">
+              <span className="text-xs text-muted font-medium mb-1.5 block">Filter by Client:</span>
+              <Select
+                value={clientFilter}
+                onChange={handleClientFilterChange}
+                placeholder="All Clients"
+                options={[
+                  { value: "", label: "All Clients" },
+                  ...clients.map((c) => ({ value: c.id, label: `${c.short_code} — ${c.name}` })),
+                ]}
+                className="w-full sm:w-56"
+              />
+            </div>
+          )}
         </div>
       </div>
 
       <div className="glass overflow-x-auto scrollbar-thin">
-        <table className="w-full text-sm min-w-[720px]">
+        <table className="w-full text-sm min-w-[980px]">
           <thead>
             <tr className="text-left text-muted border-b border-gray-100 bg-gray-50/60">
-              <th className="px-4 py-3">Project #</th>
+              <SortHeader column="created_at" label="Created At" />
+              <SortHeader column="number" label="Number" />
               <th className="px-4 py-3">Client</th>
-              <th className="px-4 py-3">Name</th>
+              <th className="px-4 py-3">Client&apos;s Project #</th>
+              <SortHeader column="name" label="Name" />
               <th className="px-4 py-3">Type</th>
               <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Description</th>
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
@@ -344,8 +449,10 @@ export default function ProjectsClient({
                   transition={{ delay: Math.min(i * 0.02, 0.4) }}
                   className="border-b border-gray-100 hover:bg-gray-50"
                 >
-                  <td className="px-4 py-3 text-muted">{p.project_number ?? "—"}</td>
+                  <td className="px-4 py-3 text-muted whitespace-nowrap">{formatDate(p.created_at)}</td>
+                  <td className="px-4 py-3 text-muted whitespace-nowrap">{p.project_number ?? "—"}</td>
                   <td className="px-4 py-3">{p.client_name}</td>
+                  <td className="px-4 py-3 text-muted">{p.client_project_number ?? "—"}</td>
                   <td className="px-4 py-3">{p.name}</td>
                   <td className="px-4 py-3">
                     {/* v3.0: prefer the real scope name(s) once assigned —
@@ -382,6 +489,9 @@ export default function ProjectsClient({
                       {p.status}
                     </span>
                   </td>
+                  <td className="px-4 py-3 text-muted max-w-[220px] truncate" title={p.description ?? undefined}>
+                    {p.description ?? "—"}
+                  </td>
                   <td className="px-4 py-3 text-right space-x-2 whitespace-nowrap">
                     <Link
                       href={`/projects/${p.id}/edit`}
@@ -401,7 +511,7 @@ export default function ProjectsClient({
             </AnimatePresence>
             {projects.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-muted">
+                <td colSpan={9} className="px-4 py-10 text-center text-muted">
                   <FaFolderOpen className="mx-auto mb-3 h-8 w-8 text-gray-300" />
                   No projects match these filters.
                 </td>

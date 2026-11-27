@@ -2,7 +2,7 @@
 
 import { revalidatePath, revalidateTag } from "next/cache";
 import { requireSession, isSuperAdminOnly } from "@/lib/session";
-import { getLeaveRequestById } from "@/lib/data";
+import { getLeaveRequestById, getAdminAndSuperAdminEmails } from "@/lib/data";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { sendHtmlEmail } from "@/lib/mailer";
 import { buildLeaveRequestEmail } from "@/lib/emailTemplates";
@@ -174,15 +174,12 @@ export async function createLeaveRequestAction(
       reason,
       submittedAt,
     });
-    // TEMPORARY, Abeer 2026-11-27: "i need to test it last time completely
-    // so make it only abeergandhi2@gmail.com" — real recipients are
-    // normally getAdminAndSuperAdminEmails() (every Admin + Super Admin),
-    // overridden here to a single test address while this is being
-    // verified end-to-end. To revert: restore the
-    // getAdminAndSuperAdminEmails import above and replace the line below
-    // with
-    //   const recipients = await getAdminAndSuperAdminEmails().catch(() => []);
-    const recipients = ["abeergandhi2@gmail.com"];
+    // Abeer, 2026-11-27: "make sure that leave request emails should go
+    // to admins and superadmins now, remove that abeergandhi2@gmail.com
+    // from there, its perfect so make it for admins and superadmins" —
+    // the single-test-address override from earlier is gone; every
+    // Admin + Super Admin gets notified again, same as before testing.
+    const recipients = await getAdminAndSuperAdminEmails().catch(() => []);
     if (recipients.length > 0) {
       await sendHtmlEmail(recipients, subject, html, text).catch(() => {});
     }

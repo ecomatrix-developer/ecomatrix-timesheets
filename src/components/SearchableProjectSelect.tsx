@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { FaSearch, FaTimes, FaPlus, FaCheck, FaFolderOpen, FaChevronDown } from "react-icons/fa";
+import { RETIRED_SCOPE_NAMES } from "@/lib/projectCategories";
 import type { Project, ProjectScope } from "@/lib/types";
 
 interface SearchableProjectSelectProps {
@@ -82,7 +83,7 @@ export default function SearchableProjectSelect({
   }, [isOpen, updatePanelRect]);
 
   const types = useScopeFilter
-    ? ["All", ...scopes.map((s) => s.name)]
+    ? ["All", ...scopes.filter((s) => !RETIRED_SCOPE_NAMES.has(s.name)).map((s) => s.name)]
     : ["All", "Energy Modelling", "BIM and AutoCad"];
   const statuses = ["All", "active", "completed", "re-work", "archived"];
 

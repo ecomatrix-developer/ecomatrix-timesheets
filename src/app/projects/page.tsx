@@ -2,8 +2,8 @@ import { redirect } from "next/navigation";
 import { unstable_cache } from "next/cache";
 import { getSession } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { getAllProjectScopes } from "@/lib/data";
-import type { Project, ProjectScope } from "@/lib/types";
+import { getAllClients, getAllProjectScopes } from "@/lib/data";
+import type { Client, Project, ProjectScope } from "@/lib/types";
 import PageTransition from "@/components/PageTransition";
 import ProjectsClient from "./ProjectsClient";
 import { PAGE_SIZE } from "@/lib/constants";
@@ -22,20 +22,40 @@ const NO_MATCH_ID = "00000000-0000-0000-0000-000000000000";
 // cached call, keyed by the actual filter values passed in — a different
 // filter/page combination is simply a different cache entry. Busted by
 // every project create/update/delete via revalidateTag("projects").
+// Abeer, 2026-11-27: "when we click the headers such as dates, project
+// names, number it should do sorting." Whitelisted column + direction
+// only — never interpolate a raw column name into `.order()` from the
+// URL directly.
+const SORT_COLUMNS = {
+  created_at: "created_at",
+  name: "name",
+  number: "project_number",
+} as const;
+export type SortKey = keyof typeof SORT_COLUMNS;
+function isSortKey(value: string): value is SortKey {
+  return value in SORT_COLUMNS;
+}
+
 interface ProjectsListParams {
   statuses: string[];
   types: string[];
   scopeIds: string[] | null; // scope ids (not project ids) — null = no scope filter applied
+  clientId: string | null;
   searchTerm: string;
   page: number;
+  sortBy: SortKey;
+  sortAsc: boolean;
 }
 
 const getProjectsListPageUncached = async ({
   statuses,
   types,
   scopeIds,
+  clientId,
   searchTerm,
   page,
+  sortBy,
+  sortAsc,
 }: ProjectsListParams): Promise<{
   projects: Project[];
   totalItems: number;
@@ -58,6 +78,7 @@ const getProjectsListPageUncached = async ({
     let q = query.select("*", { count: "exact" });
     if (statuses.length > 0) q = q.in("status", statuses);
     if (types.length > 0) q = q.in("project_type", types);
+    if (clientId) q = q.eq("client_id", clientId);
     if (scopeFilterProjectIds) {
       q = q.in("id", scopeFilterProjectIds.length > 0 ? scopeFilterProjectIds : [NO_MATCH_ID]);
     }
@@ -70,7 +91,10 @@ const getProjectsListPageUncached = async ({
     return q;
   }
 
-  const { count, error: countErr } = await applyFilters(supabaseAdmin.from("projects")).order("name");
+  const orderColumn = SORT_COLUMNS[sortBy];
+  const { count, error: countErr } = await applyFilters(supabaseAdmin.from("projects")).order(orderColumn, {
+    ascending: sortAsc,
+  });
   if (countErr) throw countErr;
 
   const totalItems = count ?? 0;
@@ -79,7 +103,9 @@ const getProjectsListPageUncached = async ({
   const from = (safePage - 1) * PAGE_SIZE;
   const to = from + PAGE_SIZE - 1;
 
-  const { data, error } = await applyFilters(supabaseAdmin.from("projects")).order("name").range(from, to);
+  const { data, error } = await applyFilters(supabaseAdmin.from("projects"))
+    .order(orderColumn, { ascending: sortAsc })
+    .range(from, to);
   if (error) throw error;
 
   const projects = (data ?? []) as Project[];
@@ -124,8 +150,11 @@ export default async function ProjectsPage({
     status?: string | string[];
     project_type?: string | string[];
     scope?: string | string[];
+    client_id?: string;
     search_term?: string;
     page?: string;
+    sort?: string;
+    dir?: string;
   }>;
 }) {
   const session = await getSession();
@@ -133,6 +162,12 @@ export default async function ProjectsPage({
   if (session.role !== "admin") redirect("/dashboard");
 
   const resolvedSearchParams = await searchParams;
+  // Abeer, 2026-11-27: "it should do sorting" — newest-first by default
+  // (matches "the first column would be created at" — the natural
+  // landing order for a column that's now front and center), overridden
+  // once the admin clicks any sortable header.
+  const sortBy: SortKey = isSortKey(resolvedSearchParams.sort ?? "") ? (resolvedSearchParams.sort as SortKey) : "created_at";
+  const sortAsc = resolvedSearchParams.dir === "asc";
   const statusesParam = resolvedSearchParams.status;
   // Default to "active" only when the status filter has never been touched
   // (no `status` key in the URL at all). Once the user clears every status
@@ -150,8 +185,19 @@ export default async function ProjectsPage({
   const selectedTypes = Array.isArray(typesParam) ? typesParam : typesParam ? [typesParam] : [];
   const scopesParam = resolvedSearchParams.scope;
   const selectedScopes = Array.isArray(scopesParam) ? scopesParam : scopesParam ? [scopesParam] : [];
+  const selectedClientId = resolvedSearchParams.client_id?.trim() || null;
   const searchTerm = (resolvedSearchParams.search_term ?? "").trim();
   const page = Math.max(1, parseInt(resolvedSearchParams.page ?? "1", 10) || 1);
+
+  // Abeer, 2026-11-27: "in the projects page show the client filter so
+  // that we can select from client as well."
+  let clients: Client[] = [];
+  try {
+    clients = await getAllClients();
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    if (code !== "PGRST205") throw err;
+  }
 
   // v3.0 (supabase_patch_9/13): the real category a project belongs to
   // (Energy / BIM - Revit / BIM - CAD / Marketing & BD / ...) lives in
@@ -181,8 +227,11 @@ export default async function ProjectsPage({
     statuses: selectedStatuses,
     types: selectedTypes,
     scopeIds,
+    clientId: selectedClientId,
     searchTerm,
     page,
+    sortBy,
+    sortAsc,
   });
   const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
@@ -195,11 +244,15 @@ export default async function ProjectsPage({
         selectedTypes={selectedTypes}
         scopes={scopes}
         selectedScopes={selectedScopes}
+        clients={clients}
+        selectedClientId={selectedClientId}
         scopeNamesByProject={scopeNamesByProject}
         searchTerm={searchTerm}
         page={safePage}
         totalPages={totalPages}
         totalItems={totalItems}
+        sortBy={sortBy}
+        sortAsc={sortAsc}
       />
     </PageTransition>
   );

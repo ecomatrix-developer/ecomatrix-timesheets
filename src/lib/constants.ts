@@ -70,15 +70,23 @@ export const COMMENT_CATEGORIES = [
   "HVAC",
   "Simulation & QA/QC",
   "Reporting",
-  "BIM-CAD",
-  "BIM-REVIT",
+  // Abeer, 2026-11-27: "there would be no BIM Revit and BIM CAD
+  // separately... it will handle both Revit and CAD comments. So there
+  // would be only single category BIM." Merged here too even though this
+  // flat list is only the pre-taxonomy fallback (CommentModal prefers the
+  // DB-driven categoryOptions whenever the v3.0 taxonomy is live) — see
+  // the same merge in projectCategories.ts for the real, in-use path.
+  "BIM",
   "Content Writing",
   "Linkedin marketing",
   "SEO (Search Engine Optimization)",
   "Email marketing",
   "Website",
   "Client Outreach",
-  "Other",
+  // Abeer, 2026-11-27: "remove the option of other from comments across
+  // all project types" — dropped here too, even though this flat list is
+  // only the pre-taxonomy fallback; see supabase_patch_25 for the real,
+  // in-use taxonomy path (the tasks table).
 ] as const;
 
 // Rows per page for every paginated list in the app (dashboard's project

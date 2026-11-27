@@ -16,6 +16,20 @@
   box-sizing: border-box;
 }
 
+/* Abeer, 2026-11-27: "remove this stepper from the timesheets grid, its
+   not needed there" — the Timesheet grid's hour-entry cells are narrow
+   (w-12) and already have their own +/- comment affordance next to them;
+   the browser's native up/down spinner just ate width and looked
+   unfinished in a cell that small. */
+.no-spinner::-webkit-outer-spin-button,
+.no-spinner::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.no-spinner[type="number"] {
+  -moz-appearance: textfield;
+}
+
 body {
   color: var(--foreground);
   background: var(--background);

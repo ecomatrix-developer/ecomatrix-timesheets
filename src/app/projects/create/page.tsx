@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
 import {
   getAllClients,
+  getAllProjects,
   getAllProjectScopes,
   isBillableColumnSupported,
   isVisibilityColumnSupported,
@@ -9,7 +10,7 @@ import {
 } from "@/lib/data";
 import PageTransition from "@/components/PageTransition";
 import CreateProjectClient from "./CreateProjectClient";
-import type { Client, ProjectScope } from "@/lib/types";
+import type { Client, Project, ProjectScope } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +48,20 @@ export default async function CreateProjectPage() {
   ]);
   const fullV3 = clients.length > 0 && billableSupported && !!nextNumberPreview;
 
+  // Abeer, 2026-11-27: "show below the drop-down where it will show the
+  // previous project so that user comes to know that existing project is
+  // there" — every project, for the client-side duplicate-detection hints
+  // under Project Number / Client's Project Number / Project Name (see
+  // findMatches in CreateProjectClient.tsx). Small enough (a few hundred
+  // rows) to ship whole rather than building a search endpoint.
+  let existingProjects: Project[] = [];
+  try {
+    existingProjects = await getAllProjects();
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    if (code !== "PGRST205") throw err;
+  }
+
   return (
     <PageTransition>
       <CreateProjectClient
@@ -55,6 +70,7 @@ export default async function CreateProjectPage() {
         fullV3={fullV3}
         nextNumberPreview={nextNumberPreview}
         visibilitySupported={visibilitySupported}
+        existingProjects={existingProjects}
       />
     </PageTransition>
   );

@@ -20,7 +20,56 @@ import {
 import { toast } from "@/lib/toast";
 import Select from "@/components/Select";
 import BackLink from "@/components/BackLink";
-import type { Client, ProjectScope } from "@/lib/types";
+import type { Client, Project, ProjectScope } from "@/lib/types";
+
+// Abeer, 2026-11-27: "if we change the project number... it should show
+// below the drop-down where it will show the previous project so that
+// user comes to know that existing project is there... prevents us to
+// keep the duplicate names." Same substring match for all three fields
+// (project number, client's project number, project name) — simplest
+// thing that genuinely surfaces a near-duplicate; min 2 characters so it
+// doesn't flood with matches on the very first keystroke.
+function findMatches(projects: Project[], value: string, getField: (p: Project) => string | null | undefined): Project[] {
+  const term = value.trim().toLowerCase();
+  if (term.length < 2) return [];
+  const matches: Project[] = [];
+  for (const p of projects) {
+    const field = getField(p)?.toLowerCase();
+    if (field && field.includes(term)) matches.push(p);
+    if (matches.length >= 6) break;
+  }
+  return matches;
+}
+
+// Abeer, 2026-11-27: "the dropdown is not appearing properly... make it
+// show full data" — this used to sit inline, inheriting its parent
+// column's width (as narrow as the 7-character Project Number field),
+// with the match text truncated into "...". Made it a floating panel
+// instead — fine on sm+ screens, where the row's fields sit side by side
+// with room around them, but on a phone (2026-11-27 follow-up: "in mobile
+// view i can edit the below fields this dropdown is taking the complete
+// space") every field already stacks full-width, so an absolutely
+// positioned panel doesn't push the next field down — it just sits on top
+// of it, blocking it. Below `sm` this renders inline (in normal flow, so
+// it genuinely pushes the next field down instead of covering it);
+// `sm:` and up it switches to the floating/overlay behavior.
+function DuplicateHint({ matches }: { matches: Project[] }) {
+  if (matches.length === 0) return null;
+  return (
+    <div className="mt-1 w-full rounded-lg border border-amber-200 bg-amber-50 p-2 shadow-lg flex flex-col gap-1 sm:absolute sm:left-0 sm:top-full sm:z-20 sm:mt-1 sm:w-80 sm:max-w-[90vw]">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+        Possible existing match{matches.length > 1 ? "es" : ""} — double-check before saving
+      </p>
+      {matches.map((p) => (
+        <p key={p.id} className="text-xs text-amber-800 break-words">
+          {p.project_number ? `#${p.project_number} · ` : ""}
+          {p.client_name} · {p.name}
+          {p.client_project_number ? ` · ${p.client_project_number}` : ""}
+        </p>
+      ))}
+    </div>
+  );
+}
 
 // v3.0 (supabase_patch_12): who may see/select this project on the
 // timesheet. Every type checked (the default for a new row) means
@@ -71,7 +120,13 @@ function blankRow(v3: boolean): RowState {
     eco_number: "",
     ecoNumberEdited: false,
     billable: true,
-    visibleTypes: [...ALL_USER_TYPES],
+    // Abeer, 2026-11-27: "by default close all of them and the user has
+    // to select that. So make it mandatory field as well." Previously
+    // defaulted to everyone checked (meaning "unrestricted"); now starts
+    // empty and handleSubmit below refuses to save a row with none
+    // checked, forcing a deliberate choice every time instead of silently
+    // inheriting "visible to everyone."
+    visibleTypes: [],
   };
 }
 
@@ -98,16 +153,40 @@ export default function CreateProjectClient({
   fullV3 = false,
   nextNumberPreview = null,
   visibilitySupported = false,
+  existingProjects = [],
 }: {
   clients: Client[];
   scopes: ProjectScope[];
   fullV3?: boolean;
   nextNumberPreview?: string | null;
   visibilitySupported?: boolean;
+  // Abeer, 2026-11-27: lightweight duplicate-detection hints while typing
+  // Project Number / Client's Project Number / Project Name — see
+  // findMatches/DuplicateHint above.
+  existingProjects?: Project[];
 }) {
   const router = useRouter();
   const v3 = clients.length > 0;
   const [pending, startTransition] = useTransition();
+
+  // Abeer, 2026-11-27: "if someone clicks on the next fields then it
+  // should close the dropdown for that... when clicked on that cell for
+  // edit numbers then it should show, but when in next field it should
+  // not, quickly closes that dropdown" — the duplicate-match hint now
+  // only shows while its own field is actually focused, not just whenever
+  // its value happens to match something. Tracks at most one (row, field)
+  // pair at a time since only one input can be focused anyway.
+  type DupField = "number" | "clientNumber" | "name";
+  const [focusedHint, setFocusedHint] = useState<{ rowId: number; field: DupField } | null>(null);
+  function isHintFocused(rowId: number, field: DupField): boolean {
+    return focusedHint?.rowId === rowId && focusedHint.field === field;
+  }
+  function focusHint(rowId: number, field: DupField) {
+    setFocusedHint({ rowId, field });
+  }
+  function blurHint(rowId: number, field: DupField) {
+    setFocusedHint((prev) => (prev?.rowId === rowId && prev.field === field ? null : prev));
+  }
 
   // Only a live-preview hint for the admin — the authoritative number is
   // still allocated atomically server-side at save time (see
@@ -204,11 +283,13 @@ export default function CreateProjectClient({
   function renderVisibilityPicker(row: RowState) {
     if (!visibilitySupported) return null;
     const everyone = row.visibleTypes.length === ALL_USER_TYPES.length;
+    const empty = row.visibleTypes.length === 0;
     return (
       <div>
         <label className="text-sm text-muted mb-1 block">
-          Visible To{" "}
-          {everyone && <span className="font-normal text-muted">(everyone — default)</span>}
+          Visible To *{" "}
+          {everyone && <span className="font-normal text-muted">(everyone)</span>}
+          {empty && <span className="font-normal text-red-600">(select at least one)</span>}
         </label>
         <div className="flex flex-wrap gap-2">
           {USER_TYPE_OPTIONS.map((o) => {
@@ -261,6 +342,14 @@ export default function CreateProjectClient({
         }
         if (!r.name.trim()) {
           toast.error("Project Name is required for every row.");
+          return;
+        }
+        // Abeer, 2026-11-27: "make it mandatory field as well. So right
+        // now it's like all of them are selected, but yeah, after this
+        // update nothing will be selected. The user has to click on any
+        // of the one to make it safe."
+        if (visibilitySupported && r.visibleTypes.length === 0) {
+          toast.error("Pick at least one \"Visible To\" option for every project row.");
           return;
         }
       }
@@ -403,20 +492,37 @@ export default function CreateProjectClient({
                     </div>
                   ) : (
                     <>
-                      <div className="flex flex-wrap items-end gap-2">
-                        <div className="w-28">
-                          <label className="text-sm text-muted mb-1 block">Project Number</label>
+                      {/* Abeer, 2026-11-27: "make sure the first row is
+                          proper its like the * is coming below so make
+                          the sure the alignment and the spacing is
+                          proper" — the Project Number column was 112px
+                          (w-28), too narrow for "Project Number *" on one
+                          line, so the asterisk wrapped onto its own line.
+                          Widened + shrink-0 so flex-wrap can't squeeze it
+                          back down. */}
+                      <div className="flex flex-wrap items-end gap-3">
+                        <div className="relative w-full sm:w-36 sm:shrink-0">
+                          <label className="text-sm text-muted mb-1 block whitespace-nowrap">
+                            Project Number *
+                          </label>
                           <input
                             value={row.eco_number}
                             onChange={(e) =>
                               updateRow(row._id, { eco_number: e.target.value, ecoNumberEdited: true })
                             }
+                            onFocus={() => focusHint(row._id, "number")}
+                            onBlur={() => blurHint(row._id, "number")}
                             className="glass-input w-full px-3 py-2"
                           />
+                          {isHintFocused(row._id, "number") && (
+                            <DuplicateHint
+                              matches={findMatches(existingProjects, row.eco_number, (p) => p.project_number)}
+                            />
+                          )}
                         </div>
-                        <span className="text-muted font-semibold pb-2.5">|</span>
+                        <span className="text-muted font-semibold pb-2.5 hidden sm:inline">|</span>
                         <div className="flex-1 min-w-[180px]">
-                          <label className="text-sm text-muted mb-1 block">Client *</label>
+                          <label className="text-sm text-muted mb-1 block whitespace-nowrap">Client *</label>
                           <Select
                             value={row.client_id ?? ""}
                             onChange={(value) => updateRow(row._id, { client_id: value })}
@@ -427,8 +533,8 @@ export default function CreateProjectClient({
                             }))}
                           />
                         </div>
-                        <div className="flex-1 min-w-[160px]">
-                          <label className="text-sm text-muted mb-1 block">
+                        <div className="relative flex-1 min-w-[160px]">
+                          <label className="text-sm text-muted mb-1 block whitespace-nowrap">
                             Client&apos;s Project Number
                           </label>
                           <input
@@ -436,19 +542,35 @@ export default function CreateProjectClient({
                             onChange={(e) =>
                               updateRow(row._id, { client_project_number: e.target.value })
                             }
+                            onFocus={() => focusHint(row._id, "clientNumber")}
+                            onBlur={() => blurHint(row._id, "clientNumber")}
                             placeholder="e.g. SMS 25-200-01"
                             className="glass-input w-full px-3 py-2"
                           />
+                          {isHintFocused(row._id, "clientNumber") && (
+                            <DuplicateHint
+                              matches={findMatches(
+                                existingProjects,
+                                row.client_project_number ?? "",
+                                (p) => p.client_project_number
+                              )}
+                            />
+                          )}
                         </div>
-                        <span className="text-muted font-semibold pb-2.5">|</span>
-                        <div className="flex-[2] min-w-[200px]">
-                          <label className="text-sm text-muted mb-1 block">Project Name *</label>
+                        <span className="text-muted font-semibold pb-2.5 hidden sm:inline">|</span>
+                        <div className="relative flex-[2] min-w-[220px]">
+                          <label className="text-sm text-muted mb-1 block whitespace-nowrap">Project Name *</label>
                           <input
                             required
                             value={row.name}
                             onChange={(e) => updateRow(row._id, { name: e.target.value })}
+                            onFocus={() => focusHint(row._id, "name")}
+                            onBlur={() => blurHint(row._id, "name")}
                             className="glass-input w-full px-3 py-2"
                           />
+                          {isHintFocused(row._id, "name") && (
+                            <DuplicateHint matches={findMatches(existingProjects, row.name, (p) => p.name)} />
+                          )}
                         </div>
                       </div>
 

@@ -131,6 +131,36 @@ export async function createProjectsBulkAction(
       if (!client) return rollbackAndFail("Selected client not found.");
       clientName = client.name;
 
+      // Abeer, 2026-11-27: "if there is duplicate project number along
+      // with client's project name and project name, so like if all the
+      // four fields are already present in the backend, then it won't
+      // allow to create another project" — project_number itself is
+      // already globally unique (the DB's partial unique index on
+      // eco_matrix_number, caught as 23505 below), so this catches the
+      // other case: the SAME client + client's project number + name
+      // being entered again under a new system-generated number.
+      // ilike treats % and _ as wildcards — escape them so a name/number
+      // that happens to contain either can't accidentally match things it
+      // shouldn't (or, worse, turn into an unintentionally broad pattern).
+      const escapeIlike = (s: string) => s.replace(/[%_]/g, "\\$&");
+      const clientProjectNumber = p.client_project_number?.trim() || null;
+      const nameTrimmed = p.name.trim();
+      let dupQuery = supabaseAdmin
+        .from("projects")
+        .select("id")
+        .eq("client_id", p.client_id)
+        .ilike("name", escapeIlike(nameTrimmed));
+      dupQuery = clientProjectNumber
+        ? dupQuery.ilike("client_project_number", escapeIlike(clientProjectNumber))
+        : dupQuery.is("client_project_number", null);
+      const { data: dup, error: dupErr } = await dupQuery.limit(1).maybeSingle();
+      if (dupErr) return rollbackAndFail(dupErr.message);
+      if (dup) {
+        return rollbackAndFail(
+          `A project for this client with the same name${clientProjectNumber ? " and client's project number" : ""} already exists.`
+        );
+      }
+
       // v3.0 (supabase_patch_11): the horizontal create form shows the
       // next number up front and lets the admin edit it before saving —
       // an explicit override skips the atomic generator entirely instead

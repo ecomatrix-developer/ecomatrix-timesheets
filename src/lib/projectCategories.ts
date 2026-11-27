@@ -9,26 +9,27 @@ import type { ProjectScope } from "./types";
 // (for every pre-v3.0 page that still groups by it — dashboard, insights,
 // exports).
 //
-// 2026-11-22 (second request): BIM was briefly collapsed into one single
-// "BIM/CADD" option (both Revit AND CAD tasks together, no way to pick
-// just one), per Abeer's own earlier request. Reversed again, same day,
-// once he hit the consequence: "there is only one option as Bim so based
-// on that we cant check the comments so add a option as Bim cad and Bim
-// revit along with bim" — a project that's specifically Revit-only or
-// CAD-only work needs its comment dropdown to show ONLY that discipline's
-// tasks, not the merged union. "BIM" (-> BIM/CADD) stays as the broad
-// option for projects that genuinely span both; "BIM - Revit" and
-// "BIM - CAD" are the two precise ones, each wired to its own existing
-// scope/billing-group (supabase_patch_9 already seeded all three scopes —
-// nothing new to migrate).
+// 2026-11-22: briefly collapsed BIM into one "BIM/CADD" option, reverted
+// the same day to separate "BIM - Revit"/"BIM - CAD" pills because the
+// merged option's comment dropdown only showed one discipline's tasks.
+// 2026-11-27: merged back to a single "BIM" option — Abeer: "there would
+// be no BIM Revit and BIM CAD separately... inside BIM it will handle
+// both Revit and CAD comments." This time it genuinely does: "bim" maps
+// to the "BIM/CADD" scope, which supabase_patch_9 already links to BOTH
+// the Revit and CAD billing groups, so buildProjectTaskMap (taxonomy.ts)
+// unions both disciplines' tasks into one project's comment dropdown —
+// the 2026-11-22 problem (only one discipline's tasks showing) doesn't
+// recur, since nothing here narrows a project down to a single discipline
+// anymore. The old "BIM - Revit"/"BIM - CAD" scopes stay in the DB
+// untouched (existing projects keep their current tasks until re-saved —
+// see SCOPE_NAME_TO_CATEGORY below); they're just no longer offered as
+// NEW choices.
 //
 // Shared between CreateProjectClient and ProjectForm (edit) so both pages
 // present the exact same category experience.
 export const CATEGORY_OPTIONS = [
   { value: "energy", label: "Energy" },
   { value: "bim", label: "BIM" },
-  { value: "bim_revit", label: "BIM - Revit" },
-  { value: "bim_cad", label: "BIM - CAD" },
   { value: "marketing_bd", label: "Marketing & BD" },
 ] as const;
 export type Category = (typeof CATEGORY_OPTIONS)[number]["value"];
@@ -36,49 +37,53 @@ export type Category = (typeof CATEGORY_OPTIONS)[number]["value"];
 export const CATEGORY_TO_SCOPE_NAME: Record<Category, string> = {
   energy: "Energy",
   bim: "BIM/CADD",
-  bim_revit: "BIM - Revit",
-  bim_cad: "BIM - CAD",
   marketing_bd: "Marketing & BD",
 };
 export const CATEGORY_TO_LEGACY_TYPE: Record<Category, string> = {
   energy: "Energy Modelling",
   bim: "BIM and AutoCad",
-  bim_revit: "BIM and AutoCad",
-  bim_cad: "BIM and AutoCad",
   marketing_bd: "BIM and AutoCad",
 };
 export const CATEGORY_LABEL: Record<Category, string> = {
   energy: "Energy",
   bim: "BIM",
-  bim_revit: "BIM - Revit",
-  bim_cad: "BIM - CAD",
   marketing_bd: "Marketing & BD",
 };
 
-// Every BIM-family scope name maps straight back to its own pill — no
-// more folding Revit/CAD onto the generic "BIM" option, so a project
-// that's specifically one discipline shows as exactly that pill checked.
+// Folds the old "BIM - Revit"/"BIM - CAD" scopes back onto the generic
+// "BIM" pill — an existing project linked to either (from before the
+// 2026-11-27 merge) still shows correctly checked on Edit instead of
+// appearing to have no category at all. Its actual scope_links row isn't
+// touched until the project is next saved, at which point it resolves to
+// "BIM/CADD" like every other BIM project.
 const SCOPE_NAME_TO_CATEGORY: Record<string, Category> = {
   Energy: "energy",
   "BIM/CADD": "bim",
-  "BIM - Revit": "bim_revit",
-  "BIM - CAD": "bim_cad",
+  "BIM - Revit": "bim",
+  "BIM - CAD": "bim",
   "Marketing & BD": "marketing_bd",
 };
+
+// Abeer, 2026-11-27: "remove the separate filters of bim cad and bim
+// revit from there no need as we have only one category" — the Projects
+// page's category filter pills are built from the FULL live project_scopes
+// table (so an existing project linked to either retired scope still
+// counts/filters correctly), which still has these two rows for the
+// reason SCOPE_NAME_TO_CATEGORY above does. UI lists that render one pill
+// per scope (the Projects page filter, SearchableProjectSelect's type
+// filter) should filter these out before rendering.
+export const RETIRED_SCOPE_NAMES = new Set(["BIM - Revit", "BIM - CAD"]);
 
 export function isMarketingOnly(categories: Category[]): boolean {
   return categories.length === 1 && categories[0] === "marketing_bd";
 }
 
-// Legacy project_type only has 2 buckets; any BIM-family pill (bim,
-// bim_revit, bim_cad) wins if checked at all (matches the pre-multi-select
-// behavior), else Energy, else (Marketing & BD alone) falls back to "BIM
-// and AutoCad" — the same convention patch_9's own internal Marketing &
-// BD project already uses.
+// Legacy project_type only has 2 buckets; BIM wins if checked at all
+// (matches the pre-multi-select behavior), else Energy, else (Marketing &
+// BD alone) falls back to "BIM and AutoCad" — the same convention
+// patch_9's own internal Marketing & BD project already uses.
 export function legacyTypeForCategories(categories: Category[]): string {
-  if (categories.some((c) => c === "bim" || c === "bim_revit" || c === "bim_cad")) {
-    return CATEGORY_TO_LEGACY_TYPE.bim;
-  }
+  if (categories.includes("bim")) return CATEGORY_TO_LEGACY_TYPE.bim;
   if (categories.includes("energy")) return CATEGORY_TO_LEGACY_TYPE.energy;
   return CATEGORY_TO_LEGACY_TYPE.marketing_bd;
 }

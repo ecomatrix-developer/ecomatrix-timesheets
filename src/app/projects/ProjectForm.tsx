@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { FaSave, FaLock } from "react-icons/fa";
+import { FaSave, FaLock, FaCalendarAlt } from "react-icons/fa";
 import { PROJECT_STATUSES, USER_TYPE_OPTIONS, ALL_USER_TYPES } from "@/lib/constants";
 import {
   CATEGORY_OPTIONS,
@@ -14,6 +14,7 @@ import {
 import type { Project, Client, ProjectScope } from "@/lib/types";
 import Select from "@/components/Select";
 import BackLink from "@/components/BackLink";
+import { toast } from "@/lib/toast";
 
 export default function ProjectForm({
   project,
@@ -71,11 +72,13 @@ export default function ProjectForm({
   // (pre-patch_11 projects) defaults to billable, matching the DB column's
   // own default.
   const [billable, setBillable] = useState<boolean>(project?.billable ?? true);
-  const [visibleTypes, setVisibleTypes] = useState<string[]>(
-    project?.visible_user_types && project.visible_user_types.length > 0
-      ? project.visible_user_types
-      : [...ALL_USER_TYPES]
-  );
+  // Abeer, 2026-11-27: "make the visible to clear by default and user
+  // will select that, and thats mandatory so fix that as well" — same
+  // rule as Create Project now applies here too. A project that's
+  // currently "everyone" (null/empty visible_user_types) no longer shows
+  // every type pre-checked; the admin has to make an explicit choice
+  // before this form can be saved again (see handleSubmit below).
+  const [visibleTypes, setVisibleTypes] = useState<string[]>(project?.visible_user_types ?? []);
 
   function toggleVisibleType(type: string) {
     setVisibleTypes((prev) => {
@@ -90,11 +93,24 @@ export default function ProjectForm({
   // original free-text field — never force a migration of old data.
   const hasEcoMatrixNumber = !!project?.eco_matrix_number;
 
+  // visibilitySupported/visibleTypes close over this on every render, so
+  // the check always sees the latest selection — same mandatory rule as
+  // Create Project, just enforced here via onSubmit since this form posts
+  // straight to a server action (no useActionState error round-trip to
+  // hook a toast into otherwise).
+  function handleSubmit(e: React.FormEvent) {
+    if (visibilitySupported && visibleTypes.length === 0) {
+      e.preventDefault();
+      toast.error('Pick at least one "Visible To" option before saving.');
+    }
+  }
+
   return (
     <div className="max-w-xl mx-auto">
       <BackLink href="/projects" label="Back to Projects" />
       <motion.form
         action={action}
+        onSubmit={handleSubmit}
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.35 }}
@@ -103,6 +119,20 @@ export default function ProjectForm({
         <h1 className="text-xl font-semibold mb-1">
           {project ? "Edit Project" : "New Project"}
         </h1>
+
+      {/* Abeer, 2026-11-27: "there would be two more fields such as
+          created at date... make these fields appear... in the edit form
+          as well" — read-only, the DB already sets this on insert. */}
+      {project && (
+        <p className="text-xs text-muted -mt-2 mb-1 flex items-center gap-1.5">
+          <FaCalendarAlt className="h-3 w-3 shrink-0" /> Created{" "}
+          {new Date(project.created_at).toLocaleDateString("en-US", {
+            year: "numeric",
+            month: "short",
+            day: "numeric",
+          })}
+        </p>
+      )}
 
       {hasEcoMatrixNumber ? (
         <div>
@@ -263,9 +293,12 @@ export default function ProjectForm({
       {visibilitySupported && (
         <div>
           <label className="text-sm text-muted mb-1 block">
-            Visible To{" "}
+            Visible To *{" "}
             {visibleTypes.length === ALL_USER_TYPES.length && (
-              <span className="font-normal text-muted">(everyone — default)</span>
+              <span className="font-normal text-muted">(everyone)</span>
+            )}
+            {visibleTypes.length === 0 && (
+              <span className="font-normal text-red-600">(select at least one)</span>
             )}
           </label>
           <input type="hidden" name="visibility_submitted" value="1" />

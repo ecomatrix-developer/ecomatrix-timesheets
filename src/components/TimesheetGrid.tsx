@@ -936,7 +936,7 @@ export default function TimesheetGrid({
               >
                 <td
                   title={row.label}
-                  className="sticky left-0 z-10 bg-white px-3 py-1.5 min-w-[220px] max-w-[260px] overflow-hidden border-r border-gray-100"
+                  className="sticky left-0 z-10 bg-white px-3 py-2 min-w-[220px] max-w-[280px] overflow-hidden border-r border-gray-100"
                 >
                   {row.target.projectId ? (
                     <div className="space-y-0.5 leading-tight">
@@ -945,10 +945,21 @@ export default function TimesheetGrid({
                           #{projectsById[row.target.projectId].project_number}
                         </p>
                       )}
-                      <p className="text-xs font-medium truncate">
+                      {/* Abeer, 2026-11-27: "second row as client name
+                          client space project number" — client's own
+                          project number appended after the client name,
+                          when the project actually has one. */}
+                      <p className="text-xs font-medium text-muted truncate">
                         {projectsById[row.target.projectId]?.client_name}
+                        {projectsById[row.target.projectId]?.client_project_number
+                          ? ` ${projectsById[row.target.projectId]!.client_project_number}`
+                          : ""}
                       </p>
-                      <p className="text-[11px] text-muted truncate">
+                      {/* "make sure project name is a little big in size
+                          its very small" — was the smallest/mutedest line
+                          of the three; it's the primary identifier, so now
+                          the largest and darkest. */}
+                      <p className="text-sm font-semibold text-foreground truncate">
                         {projectsById[row.target.projectId]?.name}
                       </p>
                     </div>
@@ -1033,7 +1044,7 @@ export default function TimesheetGrid({
                             }
                             handleCellChange(row.key, row.target, d.date, hours, cellVal?.comment ?? "");
                           }}
-                          className={`w-12 text-center rounded-md px-1 py-1 text-xs glass-input ${
+                          className={`w-12 text-center rounded-md px-1 py-1 text-xs glass-input no-spinner ${
                             isLocked ? "opacity-50 cursor-not-allowed" : ""
                           } ${
                             cellMismatch

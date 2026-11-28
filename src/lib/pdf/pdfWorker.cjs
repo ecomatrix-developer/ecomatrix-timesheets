@@ -17,6 +17,7 @@
 // in-memory here, once per render, before requiring them.
 
 const path = require("node:path");
+const fs = require("node:fs");
 const esbuild = require("esbuild");
 const Module = require("node:module");
 
@@ -37,10 +38,25 @@ async function loadRendererModule(entryPath) {
       {
         name: "alias-and-stub",
         setup(build) {
-          // Resolve the project's "@/x" -> "src/x" alias.
+          // Resolve the project's "@/x" -> "src/x" alias. Returning a `path`
+          // from onResolve stops esbuild's own resolution dead — it never
+          // probes extensions the way it does for a normal unresolved
+          // import, so every report .tsx file up to now only ever pulled
+          // runtime (non-type-only) values from "@/" paths that happened to
+          // already include their own extension or come from another
+          // bundler stage; a plain `import { x } from "@/lib/y"` of a real
+          // (non-type-only) export failed here with "Cannot read file" on
+          // the extension-less path. Probe the common extensions ourselves.
           build.onResolve({ filter: /^@\// }, (args) => {
             const rel = args.path.slice(2);
-            return { path: path.join(SRC_ROOT, rel) };
+            const basePath = path.join(SRC_ROOT, rel);
+            for (const ext of ["", ".ts", ".tsx", ".js", ".jsx"]) {
+              const candidate = basePath + ext;
+              if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+                return { path: candidate };
+              }
+            }
+            return { path: basePath };
           });
           // "server-only" is a no-op guard import; it has no CJS build
           // reachable from here, so stub it out.

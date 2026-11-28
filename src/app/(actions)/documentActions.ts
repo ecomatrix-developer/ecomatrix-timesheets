@@ -274,9 +274,13 @@ export async function getDocumentDownloadUrlAction(
     return { error: "You don't have access to this document." };
   }
 
+  // `download: doc.file_name` makes Supabase Storage add a
+  // Content-Disposition: attachment header with that filename, so the
+  // browser saves the file under its real name straight away instead of
+  // opening it inline in a new tab (what a bare signed URL does for a PDF).
   const { data, error } = await supabaseAdmin.storage
     .from(BUCKET)
-    .createSignedUrl(doc.storage_path, 60);
+    .createSignedUrl(doc.storage_path, 60, { download: doc.file_name });
   if (error) return { error: error.message };
 
   await supabaseAdmin.from("employee_document_downloads").insert({

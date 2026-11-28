@@ -1,7 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { FaUsers, FaFileAlt, FaFolder, FaUmbrellaBeach, FaUpload, FaCalendarAlt, FaArrowRight } from "react-icons/fa";
+import {
+  FaUsers,
+  FaFileAlt,
+  FaFolder,
+  FaUmbrellaBeach,
+  FaUpload,
+  FaCalendarAlt,
+  FaArrowRight,
+  FaFileInvoiceDollar,
+} from "react-icons/fa";
 
 interface OnLeaveEntry {
   name: string;
@@ -95,6 +104,12 @@ export default function AccountantDashboardClient({
           icon={<FaUpload />}
           title="Upload Documents"
           description="Open an employee's folders to view or upload their files."
+        />
+        <QuickLink
+          href="/salary_slips"
+          icon={<FaFileInvoiceDollar />}
+          title="Salary Slips"
+          description="Fill in a slip, preview it live, and send the PDF to My Documents."
         />
         <QuickLink
           href="/leave_overview"

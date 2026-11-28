@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import type { EmployeeDocument, DocumentFolder } from "@/lib/types";
 import { getDocumentDownloadUrlAction } from "@/app/(actions)/documentActions";
+import { triggerFileDownload } from "@/lib/downloadFile";
 import { toast } from "@/lib/toast";
 import { FaFileAlt, FaFolder, FaDownload, FaLock } from "react-icons/fa";
 
@@ -61,7 +62,7 @@ export default function MyDocumentsClient({
       toast.error(result.error ?? "Could not get download link.");
       return;
     }
-    window.open(result.url, "_blank", "noopener,noreferrer");
+    triggerFileDownload(result.url, doc.file_name);
   }
 
   return (

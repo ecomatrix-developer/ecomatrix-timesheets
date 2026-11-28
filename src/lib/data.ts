@@ -3,6 +3,7 @@ import { unstable_cache } from "next/cache";
 import { supabaseAdmin } from "./supabaseAdmin";
 import type { BillingGroup, Client, ContactSubmission, ContactSubmissionMessage, DocumentFolder, EmployeeDocument, LeaveBalance, LeaveRequest, LeaveRequestMessage, LeaveSummary, Project, ProjectScope, PublicUser, Task, User } from "./types";
 import { DEFAULT_ANNUAL_LEAVE_DAYS, DEFAULT_SICK_LEAVE_DAYS, calendarYearForDate, MEDICAL_CERT_FOLDER_NAME } from "./leavePolicy";
+import { SALARY_SLIP_FOLDER_NAME, type RecentSalarySlip } from "./salarySlip";
 
 export async function getAllUsers(): Promise<PublicUser[]> {
   const { data, error } = await supabaseAdmin
@@ -229,6 +230,43 @@ export async function getMedicalCertificateStatusByEmployee(quarterStart: string
     if (employeeId) result[employeeId] = true;
   }
   return result;
+}
+
+// Abeer, 2026-11-28: salary slip generation module — recent slips across
+// every employee's own "Salary Slips" folder (SALARY_SLIP_FOLDER_NAME),
+// for the history list on /salary_slips. Same two-step folders-then-docs
+// shape as getMedicalCertificateStatusByEmployee above; deliberately NOT
+// cached so a just-generated slip shows up immediately without waiting on
+// the "documents" tag's revalidate window.
+export async function getRecentSalarySlips(limit = 15): Promise<RecentSalarySlip[]> {
+  const { data: folders, error: folderErr } = await supabaseAdmin
+    .from("document_folders")
+    .select("id, employee_id")
+    .eq("name", SALARY_SLIP_FOLDER_NAME);
+  if (folderErr) {
+    if ((folderErr as { code?: string }).code === "PGRST205") return [];
+    throw folderErr;
+  }
+  if (!folders || folders.length === 0) return [];
+
+  const folderIds = folders.map((f) => f.id);
+  const employeeIdByFolder = new Map(folders.map((f) => [f.id, f.employee_id as string]));
+
+  const { data: docs, error: docErr } = await supabaseAdmin
+    .from("employee_documents")
+    .select("id, folder_id, file_name, file_size, created_at")
+    .in("folder_id", folderIds)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (docErr) throw docErr;
+
+  return (docs ?? []).map((d) => ({
+    documentId: d.id as string,
+    employeeId: employeeIdByFolder.get(d.folder_id as string) ?? "",
+    fileName: d.file_name as string,
+    fileSize: d.file_size as number | null,
+    createdAt: d.created_at as string,
+  }));
 }
 
 // Org-wide folder count, for the Accountant dashboard's stat tiles —

@@ -25,6 +25,7 @@ import {
   FaInbox,
   FaRobot,
   FaBuilding,
+  FaFileInvoiceDollar,
 } from "react-icons/fa";
 import type { IconType } from "react-icons";
 import type { SessionPayload } from "@/lib/types";
@@ -75,6 +76,7 @@ const superAdminLinks: { href: string; label: string; Icon: IconType }[] = [
 const superAdminLinksV3: { href: string; label: string; Icon: IconType }[] = [
   ...superAdminLinks,
   { href: "/manage_documents", label: "Upload Documents", Icon: FaUpload },
+  { href: "/salary_slips", label: "Salary Slips", Icon: FaFileInvoiceDollar },
   { href: "/my_documents", label: "My Documents", Icon: FaFileAlt },
 ];
 
@@ -136,9 +138,14 @@ const consultantLinks: { href: string; label: string; Icon: IconType }[] = [
 // is the same /manage_documents flow Super Admin uses (pick an employee,
 // then their folders) — now open to Accountant too (see
 // isSuperAdminOrAccountant in session.ts).
+// Abeer, 2026-11-28: "in the accountant panel we need to make a change
+// like there would a salary slip generation module" — added alongside
+// the other two Accountant surfaces, same isSuperAdminOrAccountant gate
+// as Upload Documents.
 const accountantLinks: { href: string; label: string; Icon: IconType }[] = [
   { href: "/dashboard", label: "Dashboard", Icon: FaTachometerAlt },
   { href: "/manage_documents", label: "Upload Documents", Icon: FaUpload },
+  { href: "/salary_slips", label: "Salary Slips", Icon: FaFileInvoiceDollar },
   { href: "/leave_overview", label: "Leaves View", Icon: FaCalendarAlt },
 ];
 

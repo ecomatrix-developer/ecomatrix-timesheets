@@ -124,6 +124,17 @@ export default function Select({
           <AnimatePresence>
             <motion.div
               ref={panelRef}
+              // Abeer, 2026-11-28: "when i click on month then year it gets
+              // closed not letting me to select date" — this panel renders
+              // via a portal straight onto document.body, so when Select is
+              // nested inside another popover (e.g. DatePicker's calendar),
+              // it is NOT a DOM descendant of that ancestor popover's own
+              // panel ref even though it looks nested on screen. The
+              // ancestor's outside-click handler saw every click inside
+              // here as "outside" and closed itself before the selection
+              // could register. This marker lets any ancestor popover's
+              // outside-click check explicitly exempt clicks in here.
+              data-popover-panel="true"
               initial={{ opacity: 0, y: -4, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -4, scale: 0.98 }}

@@ -13,6 +13,7 @@ import {
   type UploadDocumentState,
 } from "@/app/(actions)/documentActions";
 import Modal from "@/components/Modal";
+import { triggerFileDownload } from "@/lib/downloadFile";
 import { toast } from "@/lib/toast";
 import {
   FaUserCircle,
@@ -178,7 +179,7 @@ export default function ManageDocumentsClient({
       toast.error(result.error ?? "Could not get download link.");
       return;
     }
-    window.open(result.url, "_blank", "noopener,noreferrer");
+    triggerFileDownload(result.url, doc.file_name);
   }
 
   function confirmDelete() {

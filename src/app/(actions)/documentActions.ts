@@ -112,6 +112,12 @@ export async function deleteDocumentAction(
   if (error) return { success: false, message: error.message };
 
   revalidatePath(`/manage_documents/${doc.employee_id}`);
+  // Abeer, 2026-11-28: "give an option here itself to delete that salary
+  // slips from here so if by chance they generate wrong one can be
+  // deleted" — a salary slip IS just an employee_documents row like any
+  // other (see salarySlipActions.ts), so this one shared delete path
+  // covers it too; also revalidate the Salary Slips history list.
+  revalidatePath("/salary_slips");
   revalidateTag("documents");
   return { success: true, message: "Document deleted." };
 }

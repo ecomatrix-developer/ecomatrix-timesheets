@@ -10,6 +10,7 @@ import {
   FaHistory,
   FaUserTie,
   FaLock,
+  FaTrash,
 } from "react-icons/fa";
 import type { PublicUser } from "@/lib/types";
 import {
@@ -28,9 +29,10 @@ import {
   type RecentSalarySlip,
 } from "@/lib/salarySlip";
 import { generateSalarySlipAction } from "@/app/(actions)/salarySlipActions";
-import { getDocumentDownloadUrlAction } from "@/app/(actions)/documentActions";
+import { getDocumentDownloadUrlAction, deleteDocumentAction } from "@/app/(actions)/documentActions";
 import Select from "@/components/Select";
 import DatePicker from "@/components/DatePicker";
+import Modal from "@/components/Modal";
 import { triggerFileDownload, triggerBase64Download } from "@/lib/downloadFile";
 import { toast } from "@/lib/toast";
 
@@ -83,6 +85,8 @@ export default function SalarySlipsClient({
   const [form, setForm] = useState<SalarySlipFormData>(() => defaultSalarySlipFormData());
   const [pending, startTransition] = useTransition();
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [toDelete, setToDelete] = useState<RecentSalarySlip | null>(null);
+  const [deleting, startDeleteTransition] = useTransition();
 
   const employeeOptions = useMemo(
     () => users.map((u) => ({ value: u.id, label: `${u.name} (${u.username})` })),
@@ -194,6 +198,24 @@ export default function SalarySlipsClient({
       return;
     }
     triggerFileDownload(result.url, doc.fileName);
+  }
+
+  // Abeer, 2026-11-28: "give an option here itself to delete that salary
+  // slips from here so if by chance they generate wrong one can be
+  // deleted" — reuses the same deleteDocumentAction every other document
+  // view uses; a generated slip is just an employee_documents row, so
+  // this removes both the storage file and the row, pulling it out of the
+  // employee's My Documents too.
+  function confirmDelete() {
+    if (!toDelete) return;
+    const target = toDelete;
+    startDeleteTransition(async () => {
+      const result = await deleteDocumentAction(target.documentId);
+      if (result.success) toast.success(result.message);
+      else toast.error(result.message);
+      setToDelete(null);
+      router.refresh();
+    });
   }
 
   // Abeer, 2026-11-28: hydration-mismatch fix — `new Date()` evaluated
@@ -592,12 +614,35 @@ export default function SalarySlipsClient({
                   >
                     <FaDownload className="h-3.5 w-3.5" />
                   </button>
+                  <button
+                    onClick={() => setToDelete(doc)}
+                    title="Delete"
+                    className="shrink-0 p-2 rounded-lg text-red-600 hover:bg-red-50 transition-colors"
+                  >
+                    <FaTrash className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               );
             })
           )}
         </div>
       </div>
+
+      <Modal open={!!toDelete} onClose={() => setToDelete(null)} title="Delete salary slip?">
+        <p className="text-sm text-muted mb-4">
+          This permanently deletes <strong>{toDelete?.fileName}</strong>
+          {toDelete ? ` for ${usersById.get(toDelete.employeeId)?.name ?? "this employee"}` : ""} — it disappears
+          from their My Documents too. This cannot be undone.
+        </p>
+        <div className="flex justify-end gap-2">
+          <button className="btn-ghost px-4 py-2 text-sm" onClick={() => setToDelete(null)}>
+            Cancel
+          </button>
+          <button className="btn-danger px-4 py-2 text-sm" disabled={deleting} onClick={confirmDelete}>
+            {deleting ? "Deleting…" : "Delete"}
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }
